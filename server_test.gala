@@ -1,0 +1,147 @@
+package main
+
+import (
+    . "martianoff/gala/test"
+    . "martianoff/gala-server"
+    "martianoff/gala-server/httpcore"
+)
+
+// --- App Builder Tests ---
+
+func TestNewApp(t T) T {
+    val app = NewApp()
+    return Eq(t, app.RouteCount(), 0)
+}
+
+func TestAppGET(t T) T {
+    val app = NewApp().GET("/hello", (req httpcore.Request) => Ok("hello"))
+    return Eq(t, app.RouteCount(), 1)
+}
+
+func TestAppMultipleRoutes(t T) T {
+    val app = NewApp().
+        GET("/", (req httpcore.Request) => Ok("home")).
+        POST("/users", (req httpcore.Request) => Created("ok")).
+        DELETE("/users/{id}", (req httpcore.Request) => NoContent())
+    return Eq(t, app.RouteCount(), 3)
+}
+
+func TestAppAllMethods(t T) T {
+    val app = NewApp().
+        GET("/get", (req httpcore.Request) => Ok("get")).
+        POST("/post", (req httpcore.Request) => Ok("post")).
+        PUT("/put", (req httpcore.Request) => Ok("put")).
+        DELETE("/del", (req httpcore.Request) => Ok("del")).
+        PATCH("/patch", (req httpcore.Request) => Ok("patch")).
+        HEAD("/head", (req httpcore.Request) => Ok("head")).
+        OPTIONS("/opts", (req httpcore.Request) => Ok("opts"))
+    return Eq(t, app.RouteCount(), 7)
+}
+
+func TestAppMiddleware(t T) T {
+    val app = NewApp().
+        GET("/", (req httpcore.Request) => Ok("hello")).
+        Use(Logger()).
+        Use(Recovery())
+    var t1 = Eq(t, app.RouteCount(), 1)
+    return Eq(t1, app.Middlewares.Size(), 2)
+}
+
+func TestAppImmutability(t T) T {
+    val app1 = NewApp().GET("/a", (req httpcore.Request) => Ok("a"))
+    val app2 = app1.GET("/b", (req httpcore.Request) => Ok("b"))
+    var t1 = Eq(t, app1.RouteCount(), 1)
+    return Eq(t1, app2.RouteCount(), 2)
+}
+
+// --- Response Builder Tests ---
+
+func TestOk(t T) T {
+    val resp = Ok("hello world")
+    return Eq(t, resp.Status, 200)
+}
+
+func TestCreated(t T) T {
+    val resp = Created("created")
+    return Eq(t, resp.Status, 201)
+}
+
+func TestNoContent(t T) T {
+    val resp = NoContent()
+    return Eq(t, resp.Status, 204)
+}
+
+func TestBadRequest(t T) T {
+    val resp = BadRequest("invalid input")
+    return Eq(t, resp.Status, 400)
+}
+
+func TestNotFound(t T) T {
+    val resp = NotFound("not found")
+    return Eq(t, resp.Status, 404)
+}
+
+func TestInternalError(t T) T {
+    val resp = InternalError("server error")
+    return Eq(t, resp.Status, 500)
+}
+
+func TestJson(t T) T {
+    val resp = Json("{\"key\": \"value\"}")
+    return Eq(t, resp.Status, 200)
+}
+
+func TestText(t T) T {
+    val resp = Text("plain text")
+    return Eq(t, resp.Status, 200)
+}
+
+func TestHtml(t T) T {
+    val resp = Html("<h1>Hello</h1>")
+    return Eq(t, resp.Status, 200)
+}
+
+func TestRedirect(t T) T {
+    val resp = Redirect("/new-location")
+    return Eq(t, resp.Status, 302)
+}
+
+func TestJsonWithStatus(t T) T {
+    val resp = JsonWithStatus(201, "{\"id\": 1}")
+    return Eq(t, resp.Status, 201)
+}
+
+func TestResponseChaining(t T) T {
+    val resp = Ok("hello").
+        WithHeader("X-Custom", "test").
+        WithHeader("X-Another", "value").
+        WithStatus(202)
+    return Eq(t, resp.Status, 202)
+}
+
+// --- Middleware Tests ---
+
+func TestLoggerCreation(t T) T {
+    val mw = Logger()
+    return IsTrue(t, mw != nil)
+}
+
+func TestRecoveryCreation(t T) T {
+    val mw = Recovery()
+    return IsTrue(t, mw != nil)
+}
+
+func TestCorsCreation(t T) T {
+    val mw = Cors()
+    return IsTrue(t, mw != nil)
+}
+
+// --- Group Tests ---
+
+func TestGroup(t T) T {
+    val app = NewApp().Group("/api/v1",
+        Route("GET", "/users", (req httpcore.Request) => Ok("users")),
+        Route("POST", "/users", (req httpcore.Request) => Created("ok")),
+    )
+    return Eq(t, app.RouteCount(), 2)
+}

@@ -1,0 +1,9 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "httpcore",
+    srcs = ["httpcore.go"],
+    importpath = "martianoff/gala-server/httpcore",
+    visibility = ["//visibility:public"],
+    deps = ["@gala//std"],
+)

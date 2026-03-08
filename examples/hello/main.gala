@@ -1,0 +1,26 @@
+package main
+
+import (
+    . "martianoff/gala-server"
+    "martianoff/gala-server/httpcore"
+)
+
+func main() {
+    val app = NewApp().
+        GET("/", (req httpcore.Request) => Ok("Hello, GALA!")).
+        GET("/greet/{name}", (req httpcore.Request) => {
+            val name = req.Param("name").GetOrElse("World")
+            return Ok(s"Hello, $name!")
+        }).
+        POST("/echo", (req httpcore.Request) => {
+            val body = req.Body()
+            return Json(s"{\"echo\": \"$body\"}")
+        }).
+        GET("/health", (req httpcore.Request) => Json("{\"status\": \"ok\"}")).
+        Use(Logger()).
+        Use(Recovery()).
+        Use(Cors())
+
+    Println(s"Routes registered: ${app.RouteCount()}")
+    app.Listen(":8080")
+}

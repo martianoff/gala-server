@@ -1,0 +1,91 @@
+package server
+
+import (
+    . "martianoff/gala/collection_immutable"
+    "martianoff/gala-server/httpcore"
+)
+
+// Route represents an immutable HTTP route binding a method + pattern to a handler.
+struct Route(method string, pattern string, handler func(httpcore.Request) httpcore.Response)
+
+// App is an immutable HTTP application builder.
+// Each method returns a new App with the updated configuration.
+// Routes and middleware are accumulated via immutable collections.
+type App struct {
+    Routes      Array[Route]
+    Middlewares Array[httpcore.Middleware]
+}
+
+// NewApp creates an empty App with no routes or middleware.
+func NewApp() App = App(
+    Routes = EmptyArray[Route](),
+    Middlewares = EmptyArray[httpcore.Middleware](),
+)
+
+// addRoute is an internal helper that appends a route to the App.
+func (a App) addRoute(method string, pattern string, handler func(httpcore.Request) httpcore.Response) App =
+    a.Copy(Routes = a.Routes.Append(Route(method, pattern, handler)))
+
+// GET registers a handler for GET requests at the given pattern.
+// Patterns use Go 1.22+ syntax: "/users/{id}", "/files/{path...}"
+func (a App) GET(pattern string, handler func(httpcore.Request) httpcore.Response) App =
+    a.addRoute("GET", pattern, handler)
+
+// POST registers a handler for POST requests.
+func (a App) POST(pattern string, handler func(httpcore.Request) httpcore.Response) App =
+    a.addRoute("POST", pattern, handler)
+
+// PUT registers a handler for PUT requests.
+func (a App) PUT(pattern string, handler func(httpcore.Request) httpcore.Response) App =
+    a.addRoute("PUT", pattern, handler)
+
+// DELETE registers a handler for DELETE requests.
+func (a App) DELETE(pattern string, handler func(httpcore.Request) httpcore.Response) App =
+    a.addRoute("DELETE", pattern, handler)
+
+// PATCH registers a handler for PATCH requests.
+func (a App) PATCH(pattern string, handler func(httpcore.Request) httpcore.Response) App =
+    a.addRoute("PATCH", pattern, handler)
+
+// HEAD registers a handler for HEAD requests.
+func (a App) HEAD(pattern string, handler func(httpcore.Request) httpcore.Response) App =
+    a.addRoute("HEAD", pattern, handler)
+
+// OPTIONS registers a handler for OPTIONS requests.
+func (a App) OPTIONS(pattern string, handler func(httpcore.Request) httpcore.Response) App =
+    a.addRoute("OPTIONS", pattern, handler)
+
+// Use adds middleware to the App. Middleware wraps all handlers.
+// Last middleware added is the outermost wrapper (executes first).
+func (a App) Use(mw httpcore.Middleware) App =
+    a.Copy(Middlewares = a.Middlewares.Append(mw))
+
+// Group registers multiple routes under a common prefix.
+// Example: app.Group("/api/v1", Route("GET", "/users", handler))
+func (a App) Group(prefix string, routes ...Route) App {
+    var result = a
+    for i := 0; i < len(routes); i++ {
+        val r = routes[i]
+        result = result.addRoute(r.method, prefix + r.pattern, r.handler)
+    }
+    return result
+}
+
+// RouteCount returns the number of registered routes.
+func (a App) RouteCount() int = a.Routes.Size()
+
+// Listen starts the HTTP server on the given address and blocks.
+// Address format: ":8080", "localhost:3000", "0.0.0.0:80"
+func (a App) Listen(addr string) {
+    val sb = httpcore.NewServerBuilder()
+    a.Routes.ForEach((r Route) => {
+        sb.AddRoute(r.method, r.pattern, r.handler)
+    })
+    a.Middlewares.ForEach((mw httpcore.Middleware) => {
+        sb.AddMiddleware(mw)
+    })
+    val err = sb.ListenAndServe(addr)
+    if err != nil {
+        panic(s"Server failed to start: $err")
+    }
+}

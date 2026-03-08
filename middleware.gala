@@ -1,0 +1,13 @@
+package server
+
+import "martianoff/gala-server/httpcore"
+
+// Logger returns middleware that logs each request with method, path, status, and duration.
+func Logger() httpcore.Middleware = httpcore.LoggerMiddleware()
+
+// Recovery returns middleware that catches panics and returns a 500 response.
+func Recovery() httpcore.Middleware = httpcore.RecoveryMiddleware()
+
+// Cors returns middleware that adds CORS headers.
+// If no origins are specified, allows all origins (*).
+func Cors(origins ...string) httpcore.Middleware = httpcore.CorsMiddleware(origins...)

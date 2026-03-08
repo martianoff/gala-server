@@ -1,0 +1,80 @@
+load("@gazelle//:def.bzl", "gazelle")
+load("@gala//:gala.bzl", "gala_go_test", "gala_transpile")
+load("@rules_go//go:def.bzl", "go_library")
+
+exports_files(
+    ["go.mod"],
+    visibility = ["//visibility:public"],
+)
+
+# gazelle:prefix martianoff/gala-server
+gazelle(
+    name = "gazelle",
+)
+
+gazelle(
+    name = "gazelle-update-repos",
+    args = [
+        "-from_file=go.mod",
+        "-to_macro=deps.bzl%go_dependencies",
+        "-prune",
+    ],
+    command = "update-repos",
+)
+
+# --- GALA Server Library ---
+
+filegroup(
+    name = "gala_sources",
+    srcs = glob(
+        ["*.gala"],
+        exclude = ["*_test.gala"],
+    ),
+    visibility = ["//visibility:public"],
+)
+
+gala_transpile(
+    name = "server_go",
+    src = "server.gala",
+    out = "server.gen.go",
+    package_files = ["response.gala", "middleware.gala"],
+)
+
+gala_transpile(
+    name = "response_go",
+    src = "response.gala",
+    out = "response.gen.go",
+    package_files = ["server.gala", "middleware.gala"],
+)
+
+gala_transpile(
+    name = "middleware_go",
+    src = "middleware.gala",
+    out = "middleware.gen.go",
+    package_files = ["server.gala", "response.gala"],
+)
+
+go_library(
+    name = "gala-server",
+    srcs = [
+        "server.gen.go",
+        "response.gen.go",
+        "middleware.gen.go",
+    ],
+    importpath = "martianoff/gala-server",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//httpcore",
+        "@gala//collection_immutable",
+        "@gala//std",
+    ],
+)
+
+gala_go_test(
+    name = "server_test",
+    srcs = ["server_test.gala"],
+    deps = [
+        ":gala-server",
+        "//httpcore",
+    ],
+)

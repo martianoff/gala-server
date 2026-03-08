@@ -1,0 +1,67 @@
+package server
+
+import "martianoff/gala-server/httpcore"
+
+// --- Status Code Responses ---
+
+// Ok returns a 200 OK response with the given body.
+func Ok(body string) httpcore.Response = httpcore.NewResponse(200).WithBody(body)
+
+// Created returns a 201 Created response with the given body.
+func Created(body string) httpcore.Response = httpcore.NewResponse(201).WithBody(body)
+
+// Accepted returns a 202 Accepted response with the given body.
+func Accepted(body string) httpcore.Response = httpcore.NewResponse(202).WithBody(body)
+
+// NoContent returns a 204 No Content response with an empty body.
+func NoContent() httpcore.Response = httpcore.NewResponse(204)
+
+// BadRequest returns a 400 Bad Request response.
+func BadRequest(body string) httpcore.Response = httpcore.NewResponse(400).WithBody(body)
+
+// Unauthorized returns a 401 Unauthorized response.
+func Unauthorized(body string) httpcore.Response = httpcore.NewResponse(401).WithBody(body)
+
+// Forbidden returns a 403 Forbidden response.
+func Forbidden(body string) httpcore.Response = httpcore.NewResponse(403).WithBody(body)
+
+// NotFound returns a 404 Not Found response.
+func NotFound(body string) httpcore.Response = httpcore.NewResponse(404).WithBody(body)
+
+// MethodNotAllowed returns a 405 Method Not Allowed response.
+func MethodNotAllowed() httpcore.Response = httpcore.NewResponse(405)
+
+// Conflict returns a 409 Conflict response.
+func Conflict(body string) httpcore.Response = httpcore.NewResponse(409).WithBody(body)
+
+// InternalError returns a 500 Internal Server Error response.
+func InternalError(body string) httpcore.Response = httpcore.NewResponse(500).WithBody(body)
+
+// ServiceUnavailable returns a 503 Service Unavailable response.
+func ServiceUnavailable(body string) httpcore.Response = httpcore.NewResponse(503).WithBody(body)
+
+// --- Content-Type Helpers ---
+
+// Json returns a 200 response with Content-Type: application/json.
+func Json(body string) httpcore.Response =
+    Ok(body).WithHeader("Content-Type", "application/json")
+
+// Text returns a 200 response with Content-Type: text/plain.
+func Text(body string) httpcore.Response =
+    Ok(body).WithHeader("Content-Type", "text/plain")
+
+// Html returns a 200 response with Content-Type: text/html.
+func Html(body string) httpcore.Response =
+    Ok(body).WithHeader("Content-Type", "text/html")
+
+// JsonWithStatus returns a response with the given status and Content-Type: application/json.
+func JsonWithStatus(status int, body string) httpcore.Response =
+    httpcore.NewResponse(status).WithBody(body).WithHeader("Content-Type", "application/json")
+
+// Redirect returns a 302 Found redirect to the given URL.
+func Redirect(url string) httpcore.Response =
+    httpcore.NewResponse(302).WithHeader("Location", url)
+
+// RedirectPermanent returns a 301 Moved Permanently redirect.
+func RedirectPermanent(url string) httpcore.Response =
+    httpcore.NewResponse(301).WithHeader("Location", url)
