@@ -1,67 +1,97 @@
 package server
 
-import "martianoff/gala-server/httpcore"
+import (
+    . "martianoff/gala/collection_immutable"
+    "martianoff/gala-server/httpcore"
+)
+
+// Response is a GALA-native immutable HTTP response.
+// Each builder method returns a new Response (no mutation).
+type Response struct {
+    Status  StatusCode
+    Body    string
+    Headers Array[Tuple[string, string]]
+}
+
+// Code returns the numeric HTTP status code.
+func (r Response) Code() int = r.Status.Code()
+
+// NewResponse creates a Response with the given status code and empty body/headers.
+func NewResponse(status StatusCode) Response = Response(
+    Status = status,
+    Body = "",
+    Headers = EmptyArray[Tuple[string, string]](),
+)
+
+// WithHeader returns a new Response with an additional header.
+func (r Response) WithHeader(key string, value string) Response =
+    Response(Status = r.Status, Body = r.Body, Headers = r.Headers.Append((key, value)))
+
+// WithBody returns a new Response with the given body.
+func (r Response) WithBody(body string) Response =
+    Response(Status = r.Status, Body = body, Headers = r.Headers)
+
+// WithStatus returns a new Response with the given status code.
+func (r Response) WithStatus(status StatusCode) Response =
+    Response(Status = status, Body = r.Body, Headers = r.Headers)
+
+// HeaderValue returns a response header value by key, or empty string if not found.
+func (r Response) HeaderValue(key string) string =
+    r.Headers.Find((pair) => pair.V1 == key).Map((p) => p.V2).GetOrElse("")
 
 // --- Status Code Responses ---
 
-// Ok returns a 200 OK response with the given body.
-func Ok(body string) httpcore.Response = httpcore.NewResponse(200).WithBody(body)
+func Ok(body string) Response = NewResponse(StatusOk()).WithBody(body)
 
-// Created returns a 201 Created response with the given body.
-func Created(body string) httpcore.Response = httpcore.NewResponse(201).WithBody(body)
+func Created(body string) Response = NewResponse(StatusCreated()).WithBody(body)
 
-// Accepted returns a 202 Accepted response with the given body.
-func Accepted(body string) httpcore.Response = httpcore.NewResponse(202).WithBody(body)
+func Accepted(body string) Response = NewResponse(StatusAccepted()).WithBody(body)
 
-// NoContent returns a 204 No Content response with an empty body.
-func NoContent() httpcore.Response = httpcore.NewResponse(204)
+func NoContent() Response = NewResponse(StatusNoContent())
 
-// BadRequest returns a 400 Bad Request response.
-func BadRequest(body string) httpcore.Response = httpcore.NewResponse(400).WithBody(body)
+func BadRequest(body string) Response = NewResponse(StatusBadRequest()).WithBody(body)
 
-// Unauthorized returns a 401 Unauthorized response.
-func Unauthorized(body string) httpcore.Response = httpcore.NewResponse(401).WithBody(body)
+func Unauthorized(body string) Response = NewResponse(StatusUnauthorized()).WithBody(body)
 
-// Forbidden returns a 403 Forbidden response.
-func Forbidden(body string) httpcore.Response = httpcore.NewResponse(403).WithBody(body)
+func Forbidden(body string) Response = NewResponse(StatusForbidden()).WithBody(body)
 
-// NotFound returns a 404 Not Found response.
-func NotFound(body string) httpcore.Response = httpcore.NewResponse(404).WithBody(body)
+func NotFound(body string) Response = NewResponse(StatusNotFound()).WithBody(body)
 
-// MethodNotAllowed returns a 405 Method Not Allowed response.
-func MethodNotAllowed() httpcore.Response = httpcore.NewResponse(405)
+func MethodNotAllowed() Response = NewResponse(StatusMethodNotAllowed())
 
-// Conflict returns a 409 Conflict response.
-func Conflict(body string) httpcore.Response = httpcore.NewResponse(409).WithBody(body)
+func Conflict(body string) Response = NewResponse(StatusConflict()).WithBody(body)
 
-// InternalError returns a 500 Internal Server Error response.
-func InternalError(body string) httpcore.Response = httpcore.NewResponse(500).WithBody(body)
+func InternalError(body string) Response = NewResponse(StatusInternalError()).WithBody(body)
 
-// ServiceUnavailable returns a 503 Service Unavailable response.
-func ServiceUnavailable(body string) httpcore.Response = httpcore.NewResponse(503).WithBody(body)
+func ServiceUnavailable(body string) Response = NewResponse(StatusServiceUnavailable()).WithBody(body)
 
 // --- Content-Type Helpers ---
 
-// Json returns a 200 response with Content-Type: application/json.
-func Json(body string) httpcore.Response =
+func Json(body string) Response =
     Ok(body).WithHeader("Content-Type", "application/json")
 
-// Text returns a 200 response with Content-Type: text/plain.
-func Text(body string) httpcore.Response =
+func Text(body string) Response =
     Ok(body).WithHeader("Content-Type", "text/plain")
 
-// Html returns a 200 response with Content-Type: text/html.
-func Html(body string) httpcore.Response =
+func Html(body string) Response =
     Ok(body).WithHeader("Content-Type", "text/html")
 
-// JsonWithStatus returns a response with the given status and Content-Type: application/json.
-func JsonWithStatus(status int, body string) httpcore.Response =
-    httpcore.NewResponse(status).WithBody(body).WithHeader("Content-Type", "application/json")
+func JsonWithStatus(status StatusCode, body string) Response =
+    NewResponse(status).WithBody(body).WithHeader("Content-Type", "application/json")
 
-// Redirect returns a 302 Found redirect to the given URL.
-func Redirect(url string) httpcore.Response =
-    httpcore.NewResponse(302).WithHeader("Location", url)
+// --- Redirect Helpers ---
 
-// RedirectPermanent returns a 301 Moved Permanently redirect.
-func RedirectPermanent(url string) httpcore.Response =
-    httpcore.NewResponse(301).WithHeader("Location", url)
+func Redirect(url string) Response =
+    NewResponse(StatusCustom(302)).WithHeader("Location", url)
+
+func RedirectPermanent(url string) Response =
+    NewResponse(StatusCustom(301)).WithHeader("Location", url)
+
+// --- Bridge ---
+
+// ToBridge converts the Response to a Go bridge response for httpcore.
+func (resp Response) ToBridge() *httpcore.BridgeResponse {
+    val br = httpcore.NewBridgeResponse(resp.Code(), resp.Body)
+    resp.Headers.ForEach((pair) => br.SetHeader(pair.V1, pair.V2))
+    return br
+}

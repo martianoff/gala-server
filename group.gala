@@ -1,0 +1,72 @@
+package server
+
+import . "martianoff/gala/collection_immutable"
+
+// Group is an immutable collection of routes and scoped filters.
+// Groups cannot listen — they are composed into a Server via Group() or WithRoutes().
+//
+//   val api = NewGroup().
+//       GET("/users", listUsers).
+//       POST("/users", createUser).
+//       WithFilter(Auth())
+type Group struct {
+    Routes  Array[Route]
+    Filters Array[Filter]
+}
+
+// NewGroup creates an empty route group.
+func NewGroup() Group = Group(
+    Routes = EmptyArray[Route](),
+    Filters = EmptyArray[Filter](),
+)
+
+// --- Route Registration ---
+
+func (g Group) addRoute(method Method, pattern string, handler Handler) Group =
+    Group(Routes = g.Routes.Append(Route(method, pattern, handler)), Filters = g.Filters)
+
+func (g Group) GET(pattern string, handler func(Request) Response, filters ...Filter) Group =
+    g.addRoute(GET(), pattern, applyFilters(liftHandler(handler), ArrayOf(filters...)))
+
+func (g Group) POST(pattern string, handler func(Request) Response, filters ...Filter) Group =
+    g.addRoute(POST(), pattern, applyFilters(liftHandler(handler), ArrayOf(filters...)))
+
+func (g Group) PUT(pattern string, handler func(Request) Response, filters ...Filter) Group =
+    g.addRoute(PUT(), pattern, applyFilters(liftHandler(handler), ArrayOf(filters...)))
+
+func (g Group) DELETE(pattern string, handler func(Request) Response, filters ...Filter) Group =
+    g.addRoute(DELETE(), pattern, applyFilters(liftHandler(handler), ArrayOf(filters...)))
+
+func (g Group) PATCH(pattern string, handler func(Request) Response, filters ...Filter) Group =
+    g.addRoute(PATCH(), pattern, applyFilters(liftHandler(handler), ArrayOf(filters...)))
+
+func (g Group) HEAD(pattern string, handler func(Request) Response, filters ...Filter) Group =
+    g.addRoute(HEAD(), pattern, applyFilters(liftHandler(handler), ArrayOf(filters...)))
+
+func (g Group) OPTIONS(pattern string, handler func(Request) Response, filters ...Filter) Group =
+    g.addRoute(OPTIONS(), pattern, applyFilters(liftHandler(handler), ArrayOf(filters...)))
+
+func (g Group) Handle(method Method, pattern string, handler Handler, filters ...Filter) Group =
+    g.addRoute(method, pattern, applyFilters(handler, ArrayOf(filters...)))
+
+// --- Filters ---
+
+// WithFilter returns a new Group with an additional scoped filter.
+func (g Group) WithFilter(f Filter) Group =
+    Group(Routes = g.Routes, Filters = g.Filters.Append(f))
+
+// --- Composition ---
+
+// Group mounts a sub-group under a prefix, applying the sub-group's filters.
+func (g Group) Group(prefix string, sub Group) Group =
+    sub.Routes.FoldLeft(g, (result, r) =>
+        result.addRoute(r.Method, prefix + r.Pattern, applyFilters(r.Handler, sub.Filters)))
+
+// WithRoutes copies all routes from a sub-group (no prefix).
+func (g Group) WithRoutes(sub Group) Group = g.Group("", sub)
+
+// --- Queries ---
+
+func (g Group) RouteCount() int = g.Routes.Size()
+
+func (g Group) FilterCount() int = g.Filters.Size()

@@ -1,26 +1,35 @@
 package main
 
-import (
-    . "martianoff/gala-server"
-    "martianoff/gala-server/httpcore"
-)
+import . "martianoff/gala-server"
 
 func main() {
-    val app = NewApp().
-        GET("/", (req httpcore.Request) => Ok("Hello, GALA!")).
-        GET("/greet/{name}", (req httpcore.Request) => {
-            val name = req.Param("name").GetOrElse("World")
-            return Ok(s"Hello, $name!")
+    // API group — Auth filter applies to all routes in this group
+    val api = NewGroup().
+        GET("/users/{id}", (req) => {
+            val id = req.Param("id").GetOrElse("0")
+            return Json(s"{\"id\": \"$id\"}")
         }).
-        POST("/echo", (req httpcore.Request) => {
+        POST("/echo", (req) => {
             val body = req.Body()
             return Json(s"{\"echo\": \"$body\"}")
         }).
-        GET("/health", (req httpcore.Request) => Json("{\"status\": \"ok\"}")).
-        Use(Logger()).
-        Use(Recovery()).
-        Use(Cors())
+        WithFilter(Auth())
 
-    Println(s"Routes registered: ${app.RouteCount()}")
-    app.Listen(":8080")
+    // Build the server with three filter levels:
+    //   Per-route:  Auth() on /secret only
+    //   Group:      Auth() on /api/v1/* (from api group)
+    //   Global:     Logger, Recovery, Cors on ALL routes
+    val server = NewServer().
+        WithName("Hello API").
+        WithPort(8080).
+        GET("/", (req) => Ok("Hello, GALA!")).
+        GET("/health", (req) => Json("{\"status\": \"ok\"}")).
+        GET("/secret", (req) => Ok("secret data"), Auth()).
+        Group("/api/v1", api).
+        WithFilter(Logger()).
+        WithFilter(Recovery()).
+        WithFilter(Cors())
+
+    Println(s"Routes registered: ${server.RouteCount()}")
+    server.Listen()
 }

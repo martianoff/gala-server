@@ -3,145 +3,272 @@ package main
 import (
     . "martianoff/gala/test"
     . "martianoff/gala-server"
-    "martianoff/gala-server/httpcore"
 )
 
-// --- App Builder Tests ---
+// --- Server Builder Tests ---
 
-func TestNewApp(t T) T {
-    val app = NewApp()
-    return Eq(t, app.RouteCount(), 0)
+func TestNewServer(t T) T {
+    val s = NewServer()
+    val t1 = Eq(t, s.RouteCount(), 0)
+    val t2 = Eq(t1, s.Port, 8080)
+    return Eq(t2, s.Name, "GALA Server")
 }
 
-func TestAppGET(t T) T {
-    val app = NewApp().GET("/hello", (req httpcore.Request) => Ok("hello"))
-    return Eq(t, app.RouteCount(), 1)
+func TestWithPort(t T) T {
+    val s = NewServer().WithPort(9090)
+    return Eq(t, s.Port, 9090)
 }
 
-func TestAppMultipleRoutes(t T) T {
-    val app = NewApp().
-        GET("/", (req httpcore.Request) => Ok("home")).
-        POST("/users", (req httpcore.Request) => Created("ok")).
-        DELETE("/users/{id}", (req httpcore.Request) => NoContent())
-    return Eq(t, app.RouteCount(), 3)
+func TestWithName(t T) T {
+    val s = NewServer().WithName("My API")
+    return Eq(t, s.Name, "My API")
 }
 
-func TestAppAllMethods(t T) T {
-    val app = NewApp().
-        GET("/get", (req httpcore.Request) => Ok("get")).
-        POST("/post", (req httpcore.Request) => Ok("post")).
-        PUT("/put", (req httpcore.Request) => Ok("put")).
-        DELETE("/del", (req httpcore.Request) => Ok("del")).
-        PATCH("/patch", (req httpcore.Request) => Ok("patch")).
-        HEAD("/head", (req httpcore.Request) => Ok("head")).
-        OPTIONS("/opts", (req httpcore.Request) => Ok("opts"))
-    return Eq(t, app.RouteCount(), 7)
+func TestConfigPreservedAcrossBuilderCalls(t T) T {
+    val s = NewServer().
+        WithPort(3000).
+        WithName("Test API").
+        GET("/hello", (req) => Ok("hello")).
+        WithFilter(Logger())
+    val t1 = Eq(t, s.Port, 3000)
+    val t2 = Eq(t1, s.Name, "Test API")
+    val t3 = Eq(t2, s.RouteCount(), 1)
+    return Eq(t3, s.FilterCount(), 1)
 }
 
-func TestAppMiddleware(t T) T {
-    val app = NewApp().
-        GET("/", (req httpcore.Request) => Ok("hello")).
-        Use(Logger()).
-        Use(Recovery())
-    var t1 = Eq(t, app.RouteCount(), 1)
-    return Eq(t1, app.Middlewares.Size(), 2)
+func TestServerGET(t T) T {
+    val s = NewServer().GET("/hello", (req) => Ok("hello"))
+    return Eq(t, s.RouteCount(), 1)
 }
 
-func TestAppImmutability(t T) T {
-    val app1 = NewApp().GET("/a", (req httpcore.Request) => Ok("a"))
-    val app2 = app1.GET("/b", (req httpcore.Request) => Ok("b"))
-    var t1 = Eq(t, app1.RouteCount(), 1)
-    return Eq(t1, app2.RouteCount(), 2)
+func TestServerMultipleRoutes(t T) T {
+    val s = NewServer().
+        GET("/", (req) => Ok("home")).
+        POST("/users", (req) => Created("ok")).
+        DELETE("/users/{id}", (req) => NoContent())
+    return Eq(t, s.RouteCount(), 3)
+}
+
+func TestServerAllMethods(t T) T {
+    val s = NewServer().
+        GET("/get", (req) => Ok("get")).
+        POST("/post", (req) => Ok("post")).
+        PUT("/put", (req) => Ok("put")).
+        DELETE("/del", (req) => Ok("del")).
+        PATCH("/patch", (req) => Ok("patch")).
+        HEAD("/head", (req) => Ok("head")).
+        OPTIONS("/opts", (req) => Ok("opts"))
+    return Eq(t, s.RouteCount(), 7)
+}
+
+func TestServerImmutability(t T) T {
+    val s1 = NewServer().GET("/a", (req) => Ok("a"))
+    val s2 = s1.GET("/b", (req) => Ok("b"))
+    val t1 = Eq(t, s1.RouteCount(), 1)
+    return Eq(t1, s2.RouteCount(), 2)
 }
 
 // --- Response Builder Tests ---
 
 func TestOk(t T) T {
     val resp = Ok("hello world")
-    return Eq(t, resp.Status, 200)
+    return Eq(t, resp.Code(), 200)
 }
 
 func TestCreated(t T) T {
     val resp = Created("created")
-    return Eq(t, resp.Status, 201)
+    return Eq(t, resp.Code(), 201)
 }
 
 func TestNoContent(t T) T {
     val resp = NoContent()
-    return Eq(t, resp.Status, 204)
+    return Eq(t, resp.Code(), 204)
 }
 
 func TestBadRequest(t T) T {
     val resp = BadRequest("invalid input")
-    return Eq(t, resp.Status, 400)
+    return Eq(t, resp.Code(), 400)
 }
 
 func TestNotFound(t T) T {
     val resp = NotFound("not found")
-    return Eq(t, resp.Status, 404)
+    return Eq(t, resp.Code(), 404)
 }
 
 func TestInternalError(t T) T {
     val resp = InternalError("server error")
-    return Eq(t, resp.Status, 500)
+    return Eq(t, resp.Code(), 500)
 }
 
 func TestJson(t T) T {
     val resp = Json("{\"key\": \"value\"}")
-    return Eq(t, resp.Status, 200)
+    return Eq(t, resp.Code(), 200)
 }
 
 func TestText(t T) T {
     val resp = Text("plain text")
-    return Eq(t, resp.Status, 200)
+    return Eq(t, resp.Code(), 200)
 }
 
 func TestHtml(t T) T {
     val resp = Html("<h1>Hello</h1>")
-    return Eq(t, resp.Status, 200)
+    return Eq(t, resp.Code(), 200)
 }
 
 func TestRedirect(t T) T {
     val resp = Redirect("/new-location")
-    return Eq(t, resp.Status, 302)
+    return Eq(t, resp.Code(), 302)
 }
 
 func TestJsonWithStatus(t T) T {
-    val resp = JsonWithStatus(201, "{\"id\": 1}")
-    return Eq(t, resp.Status, 201)
+    val resp = JsonWithStatus(StatusCreated(), "{\"id\": 1}")
+    return Eq(t, resp.Code(), 201)
 }
 
 func TestResponseChaining(t T) T {
     val resp = Ok("hello").
         WithHeader("X-Custom", "test").
         WithHeader("X-Another", "value").
-        WithStatus(202)
-    return Eq(t, resp.Status, 202)
+        WithStatus(StatusAccepted())
+    return Eq(t, resp.Code(), 202)
 }
 
-// --- Middleware Tests ---
+// --- Sealed Type Tests ---
+
+func TestMethodString(t T) T {
+    val t1 = Eq(t, GET().Name(), "GET")
+    val t2 = Eq(t1, POST().Name(), "POST")
+    val t3 = Eq(t2, PUT().Name(), "PUT")
+    return Eq(t3, DELETE().Name(), "DELETE")
+}
+
+func TestStatusCodeValues(t T) T {
+    val t1 = Eq(t, StatusOk().Code(), 200)
+    val t2 = Eq(t1, StatusCreated().Code(), 201)
+    val t3 = Eq(t2, StatusNotFound().Code(), 404)
+    return Eq(t3, StatusCustom(418).Code(), 418)
+}
+
+// --- Filter Tests ---
+
+func TestWithFilter(t T) T {
+    val s = NewServer().
+        GET("/", (req) => Ok("hello")).
+        WithFilter(Logger()).
+        WithFilter(Recovery())
+    val t1 = Eq(t, s.RouteCount(), 1)
+    return Eq(t1, s.FilterCount(), 2)
+}
+
+func TestFilterImmutability(t T) T {
+    val s1 = NewServer().GET("/a", (req) => Ok("a"))
+    val s2 = s1.WithFilter(Logger())
+    val t1 = Eq(t, s1.FilterCount(), 0)
+    return Eq(t1, s2.FilterCount(), 1)
+}
 
 func TestLoggerCreation(t T) T {
-    val mw = Logger()
-    return IsTrue(t, mw != nil)
+    val f = Logger()
+    return IsTrue(t, f != nil)
 }
 
 func TestRecoveryCreation(t T) T {
-    val mw = Recovery()
-    return IsTrue(t, mw != nil)
+    val f = Recovery()
+    return IsTrue(t, f != nil)
 }
 
 func TestCorsCreation(t T) T {
-    val mw = Cors()
-    return IsTrue(t, mw != nil)
+    val f = Cors()
+    return IsTrue(t, f != nil)
+}
+
+// --- WithRoutes Tests ---
+
+func TestWithRoutes(t T) T {
+    val api = NewGroup().
+        GET("/users", (req) => Ok("users")).
+        POST("/users", (req) => Created("ok"))
+    val s = NewServer().WithRoutes(api)
+    return Eq(t, s.RouteCount(), 2)
 }
 
 // --- Group Tests ---
 
 func TestGroup(t T) T {
-    val app = NewApp().Group("/api/v1",
-        Route("GET", "/users", (req httpcore.Request) => Ok("users")),
-        Route("POST", "/users", (req httpcore.Request) => Created("ok")),
-    )
-    return Eq(t, app.RouteCount(), 2)
+    val api = NewGroup().
+        GET("/users", (req) => Ok("users")).
+        POST("/users", (req) => Created("ok"))
+    val s = NewServer().Group("/api/v1", api)
+    return Eq(t, s.RouteCount(), 2)
+}
+
+func TestGroupPreservesExistingRoutes(t T) T {
+    val api = NewGroup().GET("/items", (req) => Ok("items"))
+    val s = NewServer().
+        GET("/health", (req) => Ok("ok")).
+        Group("/api", api)
+    return Eq(t, s.RouteCount(), 2)
+}
+
+func TestGroupMultipleGroups(t T) T {
+    val v1 = NewGroup().GET("/users", (req) => Ok("v1"))
+    val v2 = NewGroup().GET("/users", (req) => Ok("v2"))
+    val s = NewServer().
+        Group("/api/v1", v1).
+        Group("/api/v2", v2)
+    return Eq(t, s.RouteCount(), 2)
+}
+
+func TestNewGroup(t T) T {
+    val g = NewGroup()
+    return Eq(t, g.RouteCount(), 0)
+}
+
+// --- Scoped Filter Tests ---
+
+func TestRouteFilter(t T) T {
+    val s = NewServer().
+        GET("/public", (req) => Ok("public")).
+        GET("/secret", (req) => Ok("secret"), Auth())
+    val t1 = Eq(t, s.RouteCount(), 2)
+    return Eq(t1, s.FilterCount(), 0)
+}
+
+func TestRouteMultipleFilters(t T) T {
+    val s = NewServer().
+        GET("/admin", (req) => Ok("admin"), Auth(), Logger())
+    return Eq(t, s.RouteCount(), 1)
+}
+
+func TestGroupFilters(t T) T {
+    val api = NewGroup().
+        GET("/users", (req) => Ok("users")).
+        WithFilter(Auth())
+    val s = NewServer().
+        GET("/health", (req) => Ok("ok")).
+        Group("/api", api).
+        WithFilter(Logger())
+    val t1 = Eq(t, s.RouteCount(), 2)
+    return Eq(t1, s.FilterCount(), 1)
+}
+
+func TestGroupFiltersDoNotLeakToParent(t T) T {
+    val api = NewGroup().
+        GET("/secret", (req) => Ok("secret")).
+        WithFilter(Auth()).
+        WithFilter(Recovery())
+    val s = NewServer().
+        GET("/public", (req) => Ok("public")).
+        Group("/api", api)
+    return Eq(t, s.FilterCount(), 0)
+}
+
+func TestAuthCreation(t T) T {
+    val f = Auth()
+    return IsTrue(t, f != nil)
+}
+
+func TestUnauthorized(t T) T {
+    val resp = Unauthorized("no access")
+    return Eq(t, resp.Code(), 401)
 }

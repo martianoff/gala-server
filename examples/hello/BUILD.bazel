@@ -3,8 +3,10 @@ load("@gala//:gala.bzl", "gala_binary")
 gala_binary(
     name = "hello",
     src = "main.gala",
-    deps = [
+    gala_deps = [
         "//:gala-server",
-        "//httpcore",
+    ],
+    deps = [
+        "@gala//collection_immutable",
     ],
 )

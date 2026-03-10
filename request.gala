@@ -1,0 +1,67 @@
+package server
+
+import "martianoff/gala-server/httpcore"
+
+// Request is a GALA-native immutable HTTP request.
+// It wraps the thin Go bridge internally — users never see httpcore types.
+type Request struct {
+    bridge httpcore.BridgeRequest
+}
+
+// Method returns the HTTP method as a sealed type.
+func (r Request) Method() Method = toMethod(r.bridge.Method)
+
+// Path returns the URL path.
+func (r Request) Path() string = r.bridge.Path
+
+// RawQuery returns the raw query string.
+func (r Request) RawQuery() string = r.bridge.RawQuery
+
+// Body returns the request body as a string.
+func (r Request) Body() string = r.bridge.Body
+
+// Param returns a path parameter by name.
+// Example: for pattern "/users/{id}", req.Param("id") returns Some("123").
+func (r Request) Param(name string) Option[string] {
+    val v = r.bridge.PathValue(name)
+    if v == "" {
+        return None[string]()
+    }
+    return Some(v)
+}
+
+// QueryParam returns a query parameter by name.
+// Example: for URL "/search?q=gala", req.QueryParam("q") returns Some("gala").
+func (r Request) QueryParam(name string) Option[string] {
+    val v = r.bridge.QueryValue(name)
+    if v == "" {
+        return None[string]()
+    }
+    return Some(v)
+}
+
+// Header returns a header value by name (case-insensitive).
+// Example: req.Header("Content-Type") returns Some("application/json").
+func (r Request) Header(name string) Option[string] {
+    val v = r.bridge.HeaderValue(name)
+    if v == "" {
+        return None[string]()
+    }
+    return Some(v)
+}
+
+// ContentType returns the Content-Type header value.
+func (r Request) ContentType() Option[string] = r.Header("Content-Type")
+
+// --- Internal ---
+
+func toMethod(s string) Method = s match {
+    case "GET" => GET()
+    case "POST" => POST()
+    case "PUT" => PUT()
+    case "DELETE" => DELETE()
+    case "PATCH" => PATCH()
+    case "HEAD" => HEAD()
+    case "OPTIONS" => OPTIONS()
+    case _ => GET()
+}

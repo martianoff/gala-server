@@ -1,0 +1,68 @@
+package server
+
+import . "martianoff/gala/concurrent"
+
+// --- HTTP Method (sealed type) ---
+
+sealed type Method {
+    case GET()
+    case POST()
+    case PUT()
+    case DELETE()
+    case PATCH()
+    case HEAD()
+    case OPTIONS()
+}
+
+func (m Method) Name() string = m match {
+    case GET() => "GET"
+    case POST() => "POST"
+    case PUT() => "PUT"
+    case DELETE() => "DELETE"
+    case PATCH() => "PATCH"
+    case HEAD() => "HEAD"
+    case OPTIONS() => "OPTIONS"
+}
+
+// --- HTTP Status Code (sealed type) ---
+
+sealed type StatusCode {
+    case StatusOk()
+    case StatusCreated()
+    case StatusAccepted()
+    case StatusNoContent()
+    case StatusBadRequest()
+    case StatusUnauthorized()
+    case StatusForbidden()
+    case StatusNotFound()
+    case StatusMethodNotAllowed()
+    case StatusConflict()
+    case StatusInternalError()
+    case StatusServiceUnavailable()
+    case StatusCustom(Value int)
+}
+
+func (s StatusCode) Code() int = s match {
+    case StatusOk() => 200
+    case StatusCreated() => 201
+    case StatusAccepted() => 202
+    case StatusNoContent() => 204
+    case StatusBadRequest() => 400
+    case StatusUnauthorized() => 401
+    case StatusForbidden() => 403
+    case StatusNotFound() => 404
+    case StatusMethodNotAllowed() => 405
+    case StatusConflict() => 409
+    case StatusInternalError() => 500
+    case StatusServiceUnavailable() => 503
+    case StatusCustom(code) => code
+}
+
+// --- Handler and Filter Types ---
+
+// Handler processes a Request and returns a Future[Response].
+type Handler func(Request) Future[Response]
+
+// Filter wraps a Handler with cross-cutting behavior (logging, recovery, CORS, etc.).
+// Filters are separate from routes — applied at Listen time.
+type Filter func(Request, Handler) Future[Response]

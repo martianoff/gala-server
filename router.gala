@@ -1,0 +1,20 @@
+package server
+
+import (
+    . "martianoff/gala/collection_immutable"
+    . "martianoff/gala/concurrent"
+)
+
+// Route binds an HTTP method + pattern to a handler.
+// Patterns use Go 1.22+ syntax: "/users/{id}", "/files/{path...}"
+struct Route(Method Method, Pattern string, Handler Handler)
+
+// liftHandler wraps a sync handler into an async Handler.
+func liftHandler(handler func(Request) Response) Handler =
+    (req Request) => FutureApply[Response](() => handler(req))
+
+// applyFilters wraps a handler with an Array of filters (outermost first).
+func applyFilters(handler Handler, filters Array[Filter]) Handler =
+    filters.FoldRight(handler, (f, inner) => (req Request) => callFilter(f, req, inner))
+
+func callFilter(f Filter, req Request, inner Handler) Future[Response] = f(req, inner)

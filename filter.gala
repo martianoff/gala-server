@@ -1,0 +1,77 @@
+package server
+
+import (
+    . "martianoff/gala/concurrent"
+    "time"
+)
+
+// Logger returns a filter that logs each request with method, path, status, and duration.
+func Logger() Filter = loggerFilter
+
+func loggerFilter(req Request, next Handler) Future[Response] {
+    val start = time.Now()
+    val result = next(req).Await()
+    val duration = time.Since(start)
+    return result match {
+        case Success(resp) => {
+            Println(s"${req.Method().Name()} ${req.Path()} -> ${resp.Code()} ($duration)")
+            FutureOf[Response](resp)
+        }
+        case Failure(err) => {
+            Println(s"${req.Method().Name()} ${req.Path()} -> ERROR ($duration)")
+            FutureFailed[Response](err)
+        }
+    }
+}
+
+// Recovery returns a filter that catches handler failures and returns a 500 response.
+func Recovery() Filter = recoveryFilter
+
+func recoveryFilter(req Request, next Handler) Future[Response] =
+    next(req).Await() match {
+        case Success(resp) => FutureOf[Response](resp)
+        case Failure(err) => {
+            Println(s"PANIC recovered: $err")
+            FutureOf[Response](InternalError("Internal Server Error"))
+        }
+    }
+
+// Cors returns a filter that adds CORS headers allowing all origins (*).
+func Cors() Filter = corsFilter
+
+func corsFilter(req Request, next Handler) Future[Response] =
+    addCorsHeaders(req, next, "*")
+
+// CorsWithOrigins returns a CORS filter restricted to the given origin.
+func CorsWithOrigins(origin string) Filter =
+    (req Request, next Handler) => addCorsHeaders(req, next, origin)
+
+// Auth returns a filter that checks for an Authorization header.
+// Returns 401 Unauthorized if the header is missing.
+func Auth() Filter = authFilter
+
+func authFilter(req Request, next Handler) Future[Response] =
+    req.Header("Authorization") match {
+        case Some(_) => next(req)
+        case None() => FutureOf[Response](Unauthorized("Unauthorized"))
+    }
+
+// AuthWithValidator returns a filter that validates the Authorization header using a custom function.
+// The validator receives the header value and returns true if valid.
+func AuthWithValidator(validate func(string) bool) Filter =
+    (req Request, next Handler) => checkAuth(req, next, validate)
+
+func checkAuth(req Request, next Handler, validate func(string) bool) Future[Response] =
+    req.Header("Authorization") match {
+        case Some(token) if validate(token) => next(req)
+        case _ => FutureOf[Response](Unauthorized("Unauthorized"))
+    }
+
+func addCorsHeaders(req Request, next Handler, origin string) Future[Response] =
+    next(req).Await() match {
+        case Success(resp) => FutureOf[Response](
+            resp.WithHeader("Access-Control-Allow-Origin", origin).
+                WithHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, PATCH, OPTIONS").
+                WithHeader("Access-Control-Allow-Headers", "Content-Type, Authorization"))
+        case Failure(err) => FutureFailed[Response](err)
+    }

@@ -24,6 +24,16 @@ gazelle(
 
 # --- GALA Server Library ---
 
+_GALA_SRCS = [
+    "types.gala",
+    "request.gala",
+    "response.gala",
+    "group.gala",
+    "server.gala",
+    "router.gala",
+    "filter.gala",
+]
+
 filegroup(
     name = "gala_sources",
     srcs = glob(
@@ -33,39 +43,31 @@ filegroup(
     visibility = ["//visibility:public"],
 )
 
-gala_transpile(
-    name = "server_go",
-    src = "server.gala",
-    out = "server.gen.go",
-    package_files = ["response.gala", "middleware.gala"],
+# Convention name for gala_deps resolution
+filegroup(
+    name = "gala-server_gala_sources",
+    srcs = [":gala_sources"],
+    visibility = ["//visibility:public"],
 )
 
-gala_transpile(
-    name = "response_go",
-    src = "response.gala",
-    out = "response.gen.go",
-    package_files = ["server.gala", "middleware.gala"],
-)
-
-gala_transpile(
-    name = "middleware_go",
-    src = "middleware.gala",
-    out = "middleware.gen.go",
-    package_files = ["server.gala", "response.gala"],
-)
+# Transpile each GALA file with package_files for cross-file type resolution
+[gala_transpile(
+    name = src.replace(".gala", "_go"),
+    src = src,
+    out = src.replace(".gala", ".gen.go"),
+    package_files = [s for s in _GALA_SRCS if s != src],
+) for src in _GALA_SRCS]
 
 go_library(
     name = "gala-server",
-    srcs = [
-        "server.gen.go",
-        "response.gen.go",
-        "middleware.gen.go",
-    ],
+    srcs = [src.replace(".gala", ".gen.go") for src in _GALA_SRCS],
     importpath = "martianoff/gala-server",
     visibility = ["//visibility:public"],
     deps = [
         "//httpcore",
         "@gala//collection_immutable",
+        "@gala//concurrent",
+        "@gala//go_interop",
         "@gala//std",
     ],
 )
@@ -73,8 +75,7 @@ go_library(
 gala_go_test(
     name = "server_test",
     srcs = ["server_test.gala"],
-    deps = [
-        ":gala-server",
-        "//httpcore",
+    gala_deps = [
+        "//:gala-server",
     ],
 )

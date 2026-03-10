@@ -1,91 +1,112 @@
 package server
 
-import (
-    . "martianoff/gala/collection_immutable"
-    "martianoff/gala-server/httpcore"
-)
+import "martianoff/gala-server/httpcore"
 
-// Route represents an immutable HTTP route binding a method + pattern to a handler.
-struct Route(method string, pattern string, handler func(httpcore.Request) httpcore.Response)
-
-// App is an immutable HTTP application builder.
-// Each method returns a new App with the updated configuration.
-// Routes and middleware are accumulated via immutable collections.
-type App struct {
-    Routes      Array[Route]
-    Middlewares Array[httpcore.Middleware]
+// Server is an immutable HTTP server with builder-pattern configuration.
+//
+//   val server = NewServer().
+//       WithName("my-api").
+//       WithPort(9090).
+//       GET("/", handler).
+//       WithFilter(Logger()).
+//       Listen()
+type Server struct {
+    root Group
+    Port int
+    Name string
 }
 
-// NewApp creates an empty App with no routes or middleware.
-func NewApp() App = App(
-    Routes = EmptyArray[Route](),
-    Middlewares = EmptyArray[httpcore.Middleware](),
+// NewServer creates an empty Server with default settings (port 8080).
+func NewServer() Server = Server(
+    root = NewGroup(),
+    Port = 8080,
+    Name = "GALA Server",
 )
 
-// addRoute is an internal helper that appends a route to the App.
-func (a App) addRoute(method string, pattern string, handler func(httpcore.Request) httpcore.Response) App =
-    a.Copy(Routes = a.Routes.Append(Route(method, pattern, handler)))
+// --- Configuration ---
 
-// GET registers a handler for GET requests at the given pattern.
-// Patterns use Go 1.22+ syntax: "/users/{id}", "/files/{path...}"
-func (a App) GET(pattern string, handler func(httpcore.Request) httpcore.Response) App =
-    a.addRoute("GET", pattern, handler)
+// WithPort sets the port the server listens on.
+func (s Server) WithPort(port int) Server = s.Copy(Port = port)
 
-// POST registers a handler for POST requests.
-func (a App) POST(pattern string, handler func(httpcore.Request) httpcore.Response) App =
-    a.addRoute("POST", pattern, handler)
+// WithName sets the server name shown in the startup message.
+func (s Server) WithName(name string) Server = s.Copy(Name = name)
 
-// PUT registers a handler for PUT requests.
-func (a App) PUT(pattern string, handler func(httpcore.Request) httpcore.Response) App =
-    a.addRoute("PUT", pattern, handler)
+// --- Routing (delegates to root group) ---
 
-// DELETE registers a handler for DELETE requests.
-func (a App) DELETE(pattern string, handler func(httpcore.Request) httpcore.Response) App =
-    a.addRoute("DELETE", pattern, handler)
+func (s Server) GET(pattern string, handler func(Request) Response, filters ...Filter) Server =
+    s.Copy(root = s.root.GET(pattern, handler, filters...))
 
-// PATCH registers a handler for PATCH requests.
-func (a App) PATCH(pattern string, handler func(httpcore.Request) httpcore.Response) App =
-    a.addRoute("PATCH", pattern, handler)
+func (s Server) POST(pattern string, handler func(Request) Response, filters ...Filter) Server =
+    s.Copy(root = s.root.POST(pattern, handler, filters...))
 
-// HEAD registers a handler for HEAD requests.
-func (a App) HEAD(pattern string, handler func(httpcore.Request) httpcore.Response) App =
-    a.addRoute("HEAD", pattern, handler)
+func (s Server) PUT(pattern string, handler func(Request) Response, filters ...Filter) Server =
+    s.Copy(root = s.root.PUT(pattern, handler, filters...))
 
-// OPTIONS registers a handler for OPTIONS requests.
-func (a App) OPTIONS(pattern string, handler func(httpcore.Request) httpcore.Response) App =
-    a.addRoute("OPTIONS", pattern, handler)
+func (s Server) DELETE(pattern string, handler func(Request) Response, filters ...Filter) Server =
+    s.Copy(root = s.root.DELETE(pattern, handler, filters...))
 
-// Use adds middleware to the App. Middleware wraps all handlers.
-// Last middleware added is the outermost wrapper (executes first).
-func (a App) Use(mw httpcore.Middleware) App =
-    a.Copy(Middlewares = a.Middlewares.Append(mw))
+func (s Server) PATCH(pattern string, handler func(Request) Response, filters ...Filter) Server =
+    s.Copy(root = s.root.PATCH(pattern, handler, filters...))
 
-// Group registers multiple routes under a common prefix.
-// Example: app.Group("/api/v1", Route("GET", "/users", handler))
-func (a App) Group(prefix string, routes ...Route) App {
-    var result = a
-    for i := 0; i < len(routes); i++ {
-        val r = routes[i]
-        result = result.addRoute(r.method, prefix + r.pattern, r.handler)
-    }
-    return result
-}
+func (s Server) HEAD(pattern string, handler func(Request) Response, filters ...Filter) Server =
+    s.Copy(root = s.root.HEAD(pattern, handler, filters...))
 
-// RouteCount returns the number of registered routes.
-func (a App) RouteCount() int = a.Routes.Size()
+func (s Server) OPTIONS(pattern string, handler func(Request) Response, filters ...Filter) Server =
+    s.Copy(root = s.root.OPTIONS(pattern, handler, filters...))
 
-// Listen starts the HTTP server on the given address and blocks.
-// Address format: ":8080", "localhost:3000", "0.0.0.0:80"
-func (a App) Listen(addr string) {
+func (s Server) Handle(method Method, pattern string, handler Handler, filters ...Filter) Server =
+    s.Copy(root = s.root.Handle(method, pattern, handler, filters...))
+
+// --- Filters ---
+
+// WithFilter returns a new Server with an additional global filter.
+func (s Server) WithFilter(f Filter) Server =
+    s.Copy(root = s.root.WithFilter(f))
+
+// --- Composition ---
+
+// Group mounts all routes from a Group under the given prefix.
+func (s Server) Group(prefix string, sub Group) Server =
+    s.Copy(root = s.root.Group(prefix, sub))
+
+// WithRoutes copies all routes from a Group (no prefix).
+func (s Server) WithRoutes(sub Group) Server =
+    s.Copy(root = s.root.WithRoutes(sub))
+
+// --- Queries ---
+
+func (s Server) RouteCount() int = s.root.RouteCount()
+
+func (s Server) FilterCount() int = s.root.FilterCount()
+
+// --- Listen ---
+
+// Listen starts the HTTP server on the configured port.
+func (s Server) Listen() Try[bool] = s.ListenOn(s":${s.Port}")
+
+// ListenOn starts the HTTP server on the given address (e.g. ":9090", "0.0.0.0:80").
+func (s Server) ListenOn(addr string) Try[bool] {
     val sb = httpcore.NewServerBuilder()
-    a.Routes.ForEach((r Route) => {
-        sb.AddRoute(r.method, r.pattern, r.handler)
+
+    s.root.Routes.ForEach((route) => {
+        val handler = applyFilters(route.Handler, s.root.Filters)
+        sb.AddRoute(route.Method.Name(), route.Pattern, makeBridgeHandler(handler))
     })
-    a.Middlewares.ForEach((mw httpcore.Middleware) => {
-        sb.AddMiddleware(mw)
-    })
+
+    Println(s"${s.Name} listening on $addr")
     val err = sb.ListenAndServe(addr)
     if err != nil {
-        panic(s"Server failed to start: $err")
+        return Failure[bool](err)
+    }
+    return Success(true)
+}
+
+func makeBridgeHandler(handler Handler) httpcore.BridgeHandler {
+    return (br httpcore.BridgeRequest) => {
+        val req = Request(bridge = br)
+        return handler(req).Await() match {
+            case Success(resp) => resp.ToBridge()
+            case Failure(err) => httpcore.NewBridgeResponse(500, s"Internal Server Error: $err")
+        }
     }
 }
