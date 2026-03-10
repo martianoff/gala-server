@@ -35,25 +35,68 @@ func main() {
 ### Prerequisites
 
 - [GALA](https://github.com/martianoff/gala) toolchain
-- [Bazel](https://bazel.build/) 7+
 - Go 1.25+
 
-### Add as a dependency
+### Using `gala build` (recommended for simple projects)
 
-**1. Create or update `gala.mod`:**
+```bash
+# Create a new project
+mkdir myapp && cd myapp
+gala mod init github.com/user/myapp
+
+# Add gala-server dependency
+gala mod add github.com/martianoff/gala-server@v0.1.0
+
+# Create main.gala (see Quick Start below)
+
+# Build and run
+gala build
+./myapp
+```
+
+Your project structure:
 
 ```
-module your/project
+myapp/
+  gala.mod       # Module manifest
+  gala.sum       # Dependency checksums (auto-generated)
+  main.gala      # Your GALA code
+```
+
+### Using Bazel
+
+For larger projects using Bazel:
+
+**1. Add `gala-server` to `gala.mod`:**
+
+```
+module github.com/user/myapp
 
 gala 1.0
 
-require martianoff/gala-server v0.1.0
+require github.com/martianoff/gala-server v0.1.0
 ```
 
-**2. Add to `MODULE.bazel`:**
+**2. Sync dependencies:**
+
+```bash
+gala mod tidy    # generates go.mod and go.sum for Bazel
+```
+
+**3. Configure `MODULE.bazel`:**
 
 ```python
+bazel_dep(name = "gala", version = "1.0.0")
 bazel_dep(name = "gala-server", version = "0.1.0")
+bazel_dep(name = "rules_go", version = "0.59.0")
+bazel_dep(name = "gazelle", version = "0.47.0")
+
+go_deps = use_extension("@gazelle//:extensions.bzl", "go_deps")
+go_deps.from_file(go_mod = "//:go.mod")
+
+# GALA dependencies
+gala = use_extension("@gala//:extensions.bzl", "gala")
+gala.from_file(gala_mod = "//:gala.mod")
 ```
 
 For local development, add a path override:
@@ -65,7 +108,7 @@ local_path_override(
 )
 ```
 
-**3. Add to your `BUILD.bazel`:**
+**4. Configure `BUILD.bazel`:**
 
 ```python
 load("@gala//:gala.bzl", "gala_binary")
@@ -79,7 +122,13 @@ gala_binary(
 )
 ```
 
-**4. Import in your GALA code:**
+**5. Build:**
+
+```bash
+bazel build //:myapp
+```
+
+### Import in your GALA code
 
 ```gala
 import . "martianoff/gala-server"
