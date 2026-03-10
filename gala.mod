@@ -1,3 +1,5 @@
 module martianoff/gala-server
 
-gala 1.0
+gala 0.13.0
+
+require github.com/martianoff/gala v0.13.0
