@@ -1,3 +1,3 @@
-module martianoff/gala-server
+module github.com/martianoff/gala-server
 
-gala 0.13.0
+gala 0.17.0

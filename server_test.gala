@@ -2,7 +2,7 @@ package main
 
 import (
     . "martianoff/gala/test"
-    . "martianoff/gala-server"
+    . "github.com/martianoff/gala-server"
 )
 
 // --- Server Builder Tests ---

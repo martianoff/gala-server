@@ -1,6 +1,6 @@
 package server
 
-import "martianoff/gala-server/httpcore"
+import "github.com/martianoff/gala-server/httpcore"
 
 // Request is a GALA-native immutable HTTP request.
 // It wraps the thin Go bridge internally — users never see httpcore types.

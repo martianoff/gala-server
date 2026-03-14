@@ -2,7 +2,7 @@ package server
 
 import (
     . "martianoff/gala/collection_immutable"
-    "martianoff/gala-server/httpcore"
+    "github.com/martianoff/gala-server/httpcore"
 )
 
 // Response is a GALA-native immutable HTTP response.

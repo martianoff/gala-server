@@ -1,6 +1,6 @@
 package server
 
-import "martianoff/gala-server/httpcore"
+import "github.com/martianoff/gala-server/httpcore"
 
 // Server is an immutable HTTP server with builder-pattern configuration.
 //
