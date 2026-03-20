@@ -67,7 +67,7 @@ func ServiceUnavailable(body string) Response = NewResponse(StatusServiceUnavail
 
 // --- Content-Type Helpers ---
 
-func Json(body string) Response =
+func JsonResponse(body string) Response =
     Ok(body).WithHeader("Content-Type", "application/json")
 
 func Text(body string) Response =

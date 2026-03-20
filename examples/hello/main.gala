@@ -7,11 +7,11 @@ func main() {
     val api = NewGroup().
         GET("/users/{id}", (req) => {
             val id = req.Param("id").GetOrElse("0")
-            return Json(s"{\"id\": \"$id\"}")
+            return JsonResponse(s"{\"id\": \"$id\"}")
         }).
         POST("/echo", (req) => {
             val body = req.Body()
-            return Json(s"{\"echo\": \"$body\"}")
+            return JsonResponse(s"{\"echo\": \"$body\"}")
         }).
         WithFilter(Auth())
 
@@ -23,7 +23,7 @@ func main() {
         WithName("Hello API").
         WithPort(8080).
         GET("/", (req) => Ok("Hello, GALA!")).
-        GET("/health", (req) => Json("{\"status\": \"ok\"}")).
+        GET("/health", (req) => JsonResponse("{\"status\": \"ok\"}")).
         GET("/secret", (req) => Ok("secret data"), Auth()).
         Group("/api/v1", api).
         WithFilter(Logger()).

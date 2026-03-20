@@ -100,8 +100,8 @@ func TestInternalError(t T) T {
     return Eq(t, resp.Code(), 500)
 }
 
-func TestJson(t T) T {
-    val resp = Json("{\"key\": \"value\"}")
+func TestJsonResponse(t T) T {
+    val resp = JsonResponse("{\"key\": \"value\"}")
     return Eq(t, resp.Code(), 200)
 }
 
