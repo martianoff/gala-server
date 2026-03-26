@@ -23,7 +23,10 @@ func NewGroup() Group = Group(
 // --- Route Registration ---
 
 func (g Group) addRoute(method Method, pattern string, handler Handler) Group =
-    Group(Routes = g.Routes.Append(Route(method, pattern, handler)), Filters = g.Filters)
+    Group(Routes = g.Routes.Append(Route(method, pattern, handler, "")), Filters = g.Filters)
+
+func (g Group) addNamedRoute(method Method, pattern string, handler Handler, name string) Group =
+    Group(Routes = g.Routes.Append(Route(method, pattern, handler, name)), Filters = g.Filters)
 
 func (g Group) GET(pattern string, handler func(Request) Response, filters ...Filter) Group =
     g.addRoute(GET(), pattern, applyFilters(liftHandler(handler), ArrayOf(filters...)))
@@ -60,7 +63,7 @@ func (g Group) WithFilter(f Filter) Group =
 // Group mounts a sub-group under a prefix, applying the sub-group's filters.
 func (g Group) Group(prefix string, sub Group) Group =
     sub.Routes.FoldLeft(g, (result, r) =>
-        result.addRoute(r.Method, prefix + r.Pattern, applyFilters(r.Handler, sub.Filters)))
+        result.addNamedRoute(r.Method, prefix + r.Pattern, applyFilters(r.Handler, sub.Filters), r.Name))
 
 // WithRoutes copies all routes from a sub-group (no prefix).
 func (g Group) WithRoutes(sub Group) Group = g.Group("", sub)

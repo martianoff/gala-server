@@ -5,5 +5,4 @@ go_library(
     srcs = ["httpcore.go"],
     importpath = "martianoff/gala-server/httpcore",
     visibility = ["//visibility:public"],
-    deps = ["@gala//std"],
 )

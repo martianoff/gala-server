@@ -1,17 +1,34 @@
-package main
+package server
 
 import (
     . "martianoff/gala/test"
-    . "github.com/martianoff/gala-server"
+    . "martianoff/gala/collection_immutable"
+    "github.com/martianoff/gala-server/httpcore"
+    "time"
 )
 
-// --- Server Builder Tests ---
+// ============================================================================
+// Test Helpers
+// ============================================================================
+
+func buildReq(b *httpcore.TestRequestBuilder) Request = Request(
+    bridge = b.Build(),
+)
+
+func testReq(method string, path string) *httpcore.TestRequestBuilder =
+    httpcore.NewTestRequestBuilder(method, path)
+
+// ============================================================================
+// Server Builder Tests
+// ============================================================================
 
 func TestNewServer(t T) T {
     val s = NewServer()
     val t1 = Eq(t, s.RouteCount(), 0)
     val t2 = Eq(t1, s.Port, 8080)
-    return Eq(t2, s.Name, "GALA Server")
+    val t3 = Eq(t2, s.Name, "GALA Server")
+    val t4 = Eq(t3, s.FilterCount(), 0)
+    return IsFalse(t4, s.Debug)
 }
 
 func TestWithPort(t T) T {
@@ -24,16 +41,30 @@ func TestWithName(t T) T {
     return Eq(t, s.Name, "My API")
 }
 
+func TestWithDebug(t T) T {
+    val s = NewServer().WithDebug(true)
+    return IsTrue(t, s.Debug)
+}
+
+func TestWithBanner(t T) T {
+    val s = NewServer().WithBanner(false)
+    return IsFalse(t, s.Banner)
+}
+
 func TestConfigPreservedAcrossBuilderCalls(t T) T {
     val s = NewServer().
         WithPort(3000).
         WithName("Test API").
+        WithDebug(true).
+        WithBanner(false).
         GET("/hello", (req) => Ok("hello")).
         WithFilter(Logger())
     val t1 = Eq(t, s.Port, 3000)
     val t2 = Eq(t1, s.Name, "Test API")
-    val t3 = Eq(t2, s.RouteCount(), 1)
-    return Eq(t3, s.FilterCount(), 1)
+    val t3 = IsTrue(t2, s.Debug)
+    val t4 = IsFalse(t3, s.Banner)
+    val t5 = Eq(t4, s.RouteCount(), 1)
+    return Eq(t5, s.FilterCount(), 1)
 }
 
 func TestServerGET(t T) T {
@@ -68,88 +99,441 @@ func TestServerImmutability(t T) T {
     return Eq(t1, s2.RouteCount(), 2)
 }
 
-// --- Response Builder Tests ---
+func TestServerAnyMethod(t T) T {
+    val s = NewServer().Any("/wildcard", (req) => Ok("any"))
+    return Eq(t, s.RouteCount(), 7)
+}
+
+func TestWithShutdownTimeout(t T) T {
+    val s = NewServer().WithShutdownTimeout(10 * time.Second)
+    return Eq(t, s.ShutdownTimeout, 10 * time.Second)
+}
+
+func TestWithNotFoundHandler(t T) T {
+    val s = NewServer().WithNotFound((req) => NotFound("custom 404"))
+    return IsTrue(t, s.NotFoundHandler != nil)
+}
+
+func TestWithErrorHandler(t T) T {
+    val s = NewServer().WithErrorHandler((err) => InternalError("custom error"))
+    return IsTrue(t, s.ErrorHandler != nil)
+}
+
+func TestServerRoutesDebug(t T) T {
+    val s = NewServer().
+        GET("/hello", (req) => Ok("hello")).
+        POST("/users", (req) => Created("ok"))
+    val routes = s.Routes()
+    val t1 = Eq(t, routes.Size(), 2)
+    return t1
+}
+
+func TestStaticRouteRegistration(t T) T {
+    val s = NewServer().
+        Static("/public/", "./static").
+        Static("/assets/", "./assets").
+        GET("/api/health", (req) => Ok("ok"))
+    val t1 = Eq(t, s.RouteCount(), 1)
+    return Eq(t1, s.Statics.Size(), 2)
+}
+
+// ============================================================================
+// Response Constructor Tests — Status Codes
+// ============================================================================
 
 func TestOk(t T) T {
-    val resp = Ok("hello world")
-    return Eq(t, resp.Code(), 200)
+    val resp = Ok("hello")
+    val t1 = Eq(t, resp.Code(), 200)
+    return Eq(t1, resp.Body, "hello")
 }
 
 func TestCreated(t T) T {
     val resp = Created("created")
-    return Eq(t, resp.Code(), 201)
+    val t1 = Eq(t, resp.Code(), 201)
+    return Eq(t1, resp.Body, "created")
+}
+
+func TestAccepted(t T) T {
+    val resp = Accepted("accepted")
+    val t1 = Eq(t, resp.Code(), 202)
+    return Eq(t1, resp.Body, "accepted")
 }
 
 func TestNoContent(t T) T {
     val resp = NoContent()
-    return Eq(t, resp.Code(), 204)
+    val t1 = Eq(t, resp.Code(), 204)
+    return Eq(t1, resp.Body, "")
 }
 
 func TestBadRequest(t T) T {
-    val resp = BadRequest("invalid input")
-    return Eq(t, resp.Code(), 400)
+    val resp = BadRequest("invalid")
+    val t1 = Eq(t, resp.Code(), 400)
+    return Eq(t1, resp.Body, "invalid")
+}
+
+func TestUnauthorized(t T) T {
+    val resp = Unauthorized("no access")
+    val t1 = Eq(t, resp.Code(), 401)
+    return Eq(t1, resp.Body, "no access")
+}
+
+func TestForbidden(t T) T {
+    val resp = Forbidden("forbidden")
+    val t1 = Eq(t, resp.Code(), 403)
+    return Eq(t1, resp.Body, "forbidden")
 }
 
 func TestNotFound(t T) T {
     val resp = NotFound("not found")
-    return Eq(t, resp.Code(), 404)
+    val t1 = Eq(t, resp.Code(), 404)
+    return Eq(t1, resp.Body, "not found")
+}
+
+func TestMethodNotAllowed(t T) T {
+    val resp = MethodNotAllowed()
+    return Eq(t, resp.Code(), 405)
+}
+
+func TestConflict(t T) T {
+    val resp = Conflict("conflict")
+    val t1 = Eq(t, resp.Code(), 409)
+    return Eq(t1, resp.Body, "conflict")
+}
+
+func TestUnprocessableEntity(t T) T {
+    val resp = UnprocessableEntity("unprocessable")
+    val t1 = Eq(t, resp.Code(), 422)
+    return Eq(t1, resp.Body, "unprocessable")
+}
+
+func TestTooManyRequests(t T) T {
+    val resp = TooManyRequests("rate limited")
+    val t1 = Eq(t, resp.Code(), 429)
+    return Eq(t1, resp.Body, "rate limited")
 }
 
 func TestInternalError(t T) T {
     val resp = InternalError("server error")
-    return Eq(t, resp.Code(), 500)
+    val t1 = Eq(t, resp.Code(), 500)
+    return Eq(t1, resp.Body, "server error")
 }
+
+func TestServiceUnavailable(t T) T {
+    val resp = ServiceUnavailable("unavailable")
+    val t1 = Eq(t, resp.Code(), 503)
+    return Eq(t1, resp.Body, "unavailable")
+}
+
+func TestRequestTimeout(t T) T {
+    val resp = RequestTimeout()
+    return Eq(t, resp.Code(), 408)
+}
+
+func TestCustomStatusCode(t T) T {
+    val resp = NewResponse(StatusCustom(418)).WithBody("I'm a teapot")
+    val t1 = Eq(t, resp.Code(), 418)
+    return Eq(t1, resp.Body, "I'm a teapot")
+}
+
+// ============================================================================
+// Response Constructor Tests — Content Types
+// ============================================================================
 
 func TestJsonResponse(t T) T {
     val resp = JsonResponse("{\"key\": \"value\"}")
-    return Eq(t, resp.Code(), 200)
+    val t1 = Eq(t, resp.Code(), 200)
+    val t2 = Eq(t1, resp.Body, "{\"key\": \"value\"}")
+    return Eq(t2, resp.HeaderValue("Content-Type"), "application/json")
 }
 
 func TestText(t T) T {
     val resp = Text("plain text")
-    return Eq(t, resp.Code(), 200)
+    val t1 = Eq(t, resp.Code(), 200)
+    val t2 = Eq(t1, resp.Body, "plain text")
+    return Eq(t2, resp.HeaderValue("Content-Type"), "text/plain")
 }
 
 func TestHtml(t T) T {
     val resp = Html("<h1>Hello</h1>")
-    return Eq(t, resp.Code(), 200)
+    val t1 = Eq(t, resp.Code(), 200)
+    val t2 = Eq(t1, resp.Body, "<h1>Hello</h1>")
+    return Eq(t2, resp.HeaderValue("Content-Type"), "text/html")
 }
 
-func TestRedirect(t T) T {
-    val resp = Redirect("/new-location")
-    return Eq(t, resp.Code(), 302)
+func TestXml(t T) T {
+    val resp = Xml("<root/>")
+    val t1 = Eq(t, resp.Code(), 200)
+    val t2 = Eq(t1, resp.Body, "<root/>")
+    return Eq(t2, resp.HeaderValue("Content-Type"), "application/xml")
 }
 
 func TestJsonWithStatus(t T) T {
     val resp = JsonWithStatus(StatusCreated(), "{\"id\": 1}")
-    return Eq(t, resp.Code(), 201)
+    val t1 = Eq(t, resp.Code(), 201)
+    val t2 = Eq(t1, resp.Body, "{\"id\": 1}")
+    return Eq(t2, resp.HeaderValue("Content-Type"), "application/json")
 }
 
-func TestResponseChaining(t T) T {
+// ============================================================================
+// Redirect Tests
+// ============================================================================
+
+func TestRedirect(t T) T {
+    val resp = Redirect("/new-location")
+    val t1 = Eq(t, resp.Code(), 302)
+    return Eq(t1, resp.HeaderValue("Location"), "/new-location")
+}
+
+func TestRedirectPermanent(t T) T {
+    val resp = RedirectPermanent("/permanent")
+    val t1 = Eq(t, resp.Code(), 301)
+    return Eq(t1, resp.HeaderValue("Location"), "/permanent")
+}
+
+// ============================================================================
+// Response Builder Tests
+// ============================================================================
+
+func TestResponseWithHeader(t T) T {
     val resp = Ok("hello").
         WithHeader("X-Custom", "test").
-        WithHeader("X-Another", "value").
-        WithStatus(StatusAccepted())
+        WithHeader("X-Another", "value")
+    val t1 = Eq(t, resp.HeaderValue("X-Custom"), "test")
+    return Eq(t1, resp.HeaderValue("X-Another"), "value")
+}
+
+func TestResponseWithBody(t T) T {
+    val resp = NoContent().WithBody("new body")
+    return Eq(t, resp.Body, "new body")
+}
+
+func TestResponseWithStatus(t T) T {
+    val resp = Ok("hello").WithStatus(StatusAccepted())
     return Eq(t, resp.Code(), 202)
 }
 
-// --- Sealed Type Tests ---
+func TestResponseImmutability(t T) T {
+    val r1 = Ok("hello")
+    val r2 = r1.WithHeader("X-Custom", "test")
+    val t1 = Eq(t, r1.HeaderValue("X-Custom"), "")
+    return Eq(t1, r2.HeaderValue("X-Custom"), "test")
+}
 
-func TestMethodString(t T) T {
+func TestResponseChaining(t T) T {
+    val resp = NewResponse(StatusOk()).
+        WithBody("chained").
+        WithHeader("X-A", "1").
+        WithHeader("X-B", "2").
+        WithStatus(StatusAccepted())
+    val t1 = Eq(t, resp.Code(), 202)
+    val t2 = Eq(t1, resp.Body, "chained")
+    val t3 = Eq(t2, resp.HeaderValue("X-A"), "1")
+    return Eq(t3, resp.HeaderValue("X-B"), "2")
+}
+
+func TestHeaderValueNotFound(t T) T {
+    val resp = Ok("hello")
+    return Eq(t, resp.HeaderValue("X-Missing"), "")
+}
+
+// ============================================================================
+// Cookie Tests
+// ============================================================================
+
+func TestResponseSetCookie(t T) T {
+    val resp = Ok("hello").SetCookie("session", "abc123")
+    val t1 = Eq(t, resp.Cookies.Size(), 1)
+    val cookie = resp.Cookies.Head()
+    val t2 = Eq(t1, cookie.Name, "session")
+    val t3 = Eq(t2, cookie.Value, "abc123")
+    return Eq(t3, cookie.Path, "/")
+}
+
+func TestResponseSetSecureCookie(t T) T {
+    val resp = Ok("hello").SetSecureCookie("token", "xyz", 3600)
+    val cookie = resp.Cookies.Head()
+    val t1 = Eq(t, cookie.Name, "token")
+    val t2 = Eq(t1, cookie.Value, "xyz")
+    val t3 = Eq(t2, cookie.Path, "/")
+    val t4 = Eq(t3, cookie.MaxAge, 3600)
+    val t5 = IsTrue(t4, cookie.Secure)
+    val t6 = IsTrue(t5, cookie.HttpOnly)
+    return Eq(t6, cookie.SameSite, "Lax")
+}
+
+func TestResponseDeleteCookie(t T) T {
+    val resp = Ok("hello").DeleteCookie("session")
+    val cookie = resp.Cookies.Head()
+    val t1 = Eq(t, cookie.Name, "session")
+    val t2 = Eq(t1, cookie.Value, "")
+    return Eq(t2, cookie.MaxAge, -1)
+}
+
+func TestResponseMultipleCookies(t T) T {
+    val resp = Ok("hello").
+        SetCookie("a", "1").
+        SetCookie("b", "2").
+        SetCookie("c", "3")
+    return Eq(t, resp.Cookies.Size(), 3)
+}
+
+func TestCookieImmutability(t T) T {
+    val r1 = Ok("hello")
+    val r2 = r1.SetCookie("session", "abc")
+    val t1 = Eq(t, r1.Cookies.Size(), 0)
+    return Eq(t1, r2.Cookies.Size(), 1)
+}
+
+// ============================================================================
+// Sealed Type Tests
+// ============================================================================
+
+func TestMethodSealed(t T) T {
     val t1 = Eq(t, GET().Name(), "GET")
     val t2 = Eq(t1, POST().Name(), "POST")
     val t3 = Eq(t2, PUT().Name(), "PUT")
-    return Eq(t3, DELETE().Name(), "DELETE")
+    val t4 = Eq(t3, DELETE().Name(), "DELETE")
+    val t5 = Eq(t4, PATCH().Name(), "PATCH")
+    val t6 = Eq(t5, HEAD().Name(), "HEAD")
+    return Eq(t6, OPTIONS().Name(), "OPTIONS")
 }
 
 func TestStatusCodeValues(t T) T {
     val t1 = Eq(t, StatusOk().Code(), 200)
     val t2 = Eq(t1, StatusCreated().Code(), 201)
-    val t3 = Eq(t2, StatusNotFound().Code(), 404)
-    return Eq(t3, StatusCustom(418).Code(), 418)
+    val t3 = Eq(t2, StatusAccepted().Code(), 202)
+    val t4 = Eq(t3, StatusNoContent().Code(), 204)
+    val t5 = Eq(t4, StatusBadRequest().Code(), 400)
+    val t6 = Eq(t5, StatusUnauthorized().Code(), 401)
+    val t7 = Eq(t6, StatusForbidden().Code(), 403)
+    val t8 = Eq(t7, StatusNotFound().Code(), 404)
+    val t9 = Eq(t8, StatusMethodNotAllowed().Code(), 405)
+    val t10 = Eq(t9, StatusConflict().Code(), 409)
+    val t11 = Eq(t10, StatusInternalError().Code(), 500)
+    val t12 = Eq(t11, StatusServiceUnavailable().Code(), 503)
+    return Eq(t12, StatusCustom(418).Code(), 418)
 }
 
-// --- Filter Tests ---
+// ============================================================================
+// Request Tests (via TestRequestBuilder)
+// ============================================================================
+
+func TestRequestMethod(t T) T {
+    val req = buildReq(testReq("GET", "/hello"))
+    return Eq(t, req.Method().Name(), "GET")
+}
+
+func TestRequestPath(t T) T {
+    val req = buildReq(testReq("GET", "/users/42"))
+    return Eq(t, req.Path(), "/users/42")
+}
+
+func TestRequestBody(t T) T {
+    val req = buildReq(testReq("POST", "/data").WithBody("payload"))
+    return Eq(t, req.Body(), "payload")
+}
+
+func TestRequestParam(t T) T {
+    val req = buildReq(testReq("GET", "/users/42").WithPathParam("id", "42"))
+    val t1 = IsSome(t, req.Param("id"))
+    val t2 = Eq(t1, req.Param("id").Get(), "42")
+    return IsNone(t2, req.Param("missing"))
+}
+
+func TestRequestParamInt(t T) T {
+    val req = buildReq(testReq("GET", "/users/42").WithPathParam("id", "42"))
+    val t1 = IsSome(t, req.ParamInt("id"))
+    val t2 = Eq(t1, req.ParamInt("id").Get(), 42)
+    return IsNone(t2, req.ParamInt("missing"))
+}
+
+func TestRequestQueryParam(t T) T {
+    val req = buildReq(testReq("GET", "/search").WithRawQuery("q=gala&page=2"))
+    val t1 = Eq(t, req.QueryParam("q").Get(), "gala")
+    val t2 = Eq(t1, req.QueryParam("page").Get(), "2")
+    return IsNone(t2, req.QueryParam("missing"))
+}
+
+func TestRequestQueryParamDefault(t T) T {
+    val req = buildReq(testReq("GET", "/search").WithRawQuery("q=gala"))
+    val t1 = Eq(t, req.QueryParamDefault("q", "none"), "gala")
+    return Eq(t1, req.QueryParamDefault("missing", "default"), "default")
+}
+
+func TestRequestQueryParamInt(t T) T {
+    val req = buildReq(testReq("GET", "/page").WithRawQuery("page=5"))
+    val t1 = IsSome(t, req.QueryParamInt("page"))
+    return Eq(t1, req.QueryParamInt("page").Get(), 5)
+}
+
+func TestRequestHeader(t T) T {
+    val req = buildReq(testReq("GET", "/").WithHeader("Authorization", "Bearer token123"))
+    val t1 = IsSome(t, req.Header("Authorization"))
+    val t2 = Eq(t1, req.Header("Authorization").Get(), "Bearer token123")
+    return IsNone(t2, req.Header("Missing"))
+}
+
+func TestRequestContentType(t T) T {
+    val req = buildReq(testReq("POST", "/").WithHeader("Content-Type", "application/json"))
+    return Eq(t, req.ContentType().Get(), "application/json")
+}
+
+func TestRequestCookie(t T) T {
+    val req = buildReq(testReq("GET", "/").WithCookie("session", "abc123"))
+    val t1 = IsSome(t, req.Cookie("session"))
+    val t2 = Eq(t1, req.Cookie("session").Get(), "abc123")
+    return IsNone(t2, req.Cookie("missing"))
+}
+
+func TestRequestFormValue(t T) T {
+    val req = buildReq(testReq("POST", "/").WithFormParam("username", "alice"))
+    val t1 = IsSome(t, req.FormValue("username"))
+    return Eq(t1, req.FormValue("username").Get(), "alice")
+}
+
+func TestRequestHost(t T) T {
+    val req = buildReq(testReq("GET", "/").WithHost("example.com"))
+    return Eq(t, req.Host(), "example.com")
+}
+
+func TestRequestScheme(t T) T {
+    val req = buildReq(testReq("GET", "/").WithScheme("https"))
+    return Eq(t, req.Scheme(), "https")
+}
+
+func TestRequestIsTLS(t T) T {
+    val req1 = buildReq(testReq("GET", "/"))
+    val req2 = buildReq(testReq("GET", "/").WithTLS(true))
+    val t1 = IsFalse(t, req1.IsTLS())
+    return IsTrue(t1, req2.IsTLS())
+}
+
+func TestRequestRealIP(t T) T {
+    val req = buildReq(testReq("GET", "/").
+        WithHeader("X-Real-Ip", "10.0.0.1").
+        WithRemoteAddr("192.168.1.1:5000"))
+    return Eq(t, req.RealIP(), "10.0.0.1")
+}
+
+func TestRequestRealIPFallback(t T) T {
+    val req = buildReq(testReq("GET", "/").WithRemoteAddr("192.168.1.1:5000"))
+    return Eq(t, req.RealIP(), "192.168.1.1")
+}
+
+func TestRequestCtxGetSet(t T) T {
+    val req = buildReq(testReq("GET", "/"))
+    req.CtxSet("user", "alice")
+    return Eq(t, req.CtxGet("user").Get(), "alice")
+}
+
+func TestRequestCtxGetMissing(t T) T {
+    val req = buildReq(testReq("GET", "/"))
+    return IsNone(t, req.CtxGet("missing"))
+}
+
+// ============================================================================
+// Filter Creation Tests
+// ============================================================================
 
 func TestWithFilter(t T) T {
     val s = NewServer().
@@ -167,22 +551,74 @@ func TestFilterImmutability(t T) T {
     return Eq(t1, s2.FilterCount(), 1)
 }
 
-func TestLoggerCreation(t T) T {
-    val f = Logger()
-    return IsTrue(t, f != nil)
-}
+func TestLoggerCreation(t T) T = IsTrue(t, Logger() != nil)
 
-func TestRecoveryCreation(t T) T {
-    val f = Recovery()
-    return IsTrue(t, f != nil)
-}
+func TestRecoveryCreation(t T) T = IsTrue(t, Recovery() != nil)
 
-func TestCorsCreation(t T) T {
-    val f = Cors()
-    return IsTrue(t, f != nil)
-}
+func TestCorsCreation(t T) T = IsTrue(t, Cors() != nil)
 
-// --- WithRoutes Tests ---
+func TestCorsWithOriginsCreation(t T) T = IsTrue(t, CorsWithOrigins("https://example.com") != nil)
+
+func TestCorsWithConfigCreation(t T) T =
+    IsTrue(t, CorsWithConfig("https://example.com", "GET, POST", "Content-Type", "86400") != nil)
+
+func TestAuthCreation(t T) T = IsTrue(t, Auth() != nil)
+
+func TestAuthWithValidatorCreation(t T) T =
+    IsTrue(t, AuthWithValidator((h) => h == "valid") != nil)
+
+func TestAuthBearerCreation(t T) T =
+    IsTrue(t, AuthBearer((token) => token == "valid") != nil)
+
+func TestBasicAuthCreation(t T) T =
+    IsTrue(t, BasicAuth((u, p) => u == "admin") != nil)
+
+func TestKeyAuthCreation(t T) T =
+    IsTrue(t, KeyAuth("header:X-API-Key", (k) => k == "secret") != nil)
+
+func TestRateLimitCreation(t T) T =
+    IsTrue(t, RateLimit(100.0, 10.0) != nil)
+
+func TestRateLimitPerIPCreation(t T) T =
+    IsTrue(t, RateLimitPerIP(100.0, 10.0) != nil)
+
+func TestTimeoutCreation(t T) T =
+    IsTrue(t, Timeout(5 * time.Second) != nil)
+
+func TestGzipCreation(t T) T = IsTrue(t, Gzip() != nil)
+
+func TestRequestIdCreation(t T) T = IsTrue(t, RequestId() != nil)
+
+func TestSecureCreation(t T) T = IsTrue(t, Secure() != nil)
+
+func TestBodyLimitCreation(t T) T = IsTrue(t, BodyLimit("2M") != nil)
+
+func TestBodyLimitBytesCreation(t T) T = IsTrue(t, BodyLimitBytes(1024) != nil)
+
+func TestCSRFCreation(t T) T = IsTrue(t, CSRF("secret-key") != nil)
+
+func TestHTTPSRedirectCreation(t T) T = IsTrue(t, HTTPSRedirect() != nil)
+
+func TestWWWRedirectCreation(t T) T = IsTrue(t, WWWRedirect() != nil)
+
+func TestNonWWWRedirectCreation(t T) T = IsTrue(t, NonWWWRedirect() != nil)
+
+func TestTrailingSlashCreation(t T) T = IsTrue(t, TrailingSlash() != nil)
+
+func TestRemoveTrailingSlashCreation(t T) T = IsTrue(t, RemoveTrailingSlash() != nil)
+
+func TestRewriteCreation(t T) T =
+    IsTrue(t, Rewrite(ArrayOf(("/old/*", "/new/$1"))) != nil)
+
+// ============================================================================
+// Group Tests
+// ============================================================================
+
+func TestNewGroup(t T) T {
+    val g = NewGroup()
+    val t1 = Eq(t, g.RouteCount(), 0)
+    return Eq(t1, g.FilterCount(), 0)
+}
 
 func TestWithRoutes(t T) T {
     val api = NewGroup().
@@ -191,8 +627,6 @@ func TestWithRoutes(t T) T {
     val s = NewServer().WithRoutes(api)
     return Eq(t, s.RouteCount(), 2)
 }
-
-// --- Group Tests ---
 
 func TestGroup(t T) T {
     val api = NewGroup().
@@ -218,13 +652,6 @@ func TestGroupMultipleGroups(t T) T {
         Group("/api/v2", v2)
     return Eq(t, s.RouteCount(), 2)
 }
-
-func TestNewGroup(t T) T {
-    val g = NewGroup()
-    return Eq(t, g.RouteCount(), 0)
-}
-
-// --- Scoped Filter Tests ---
 
 func TestRouteFilter(t T) T {
     val s = NewServer().
@@ -263,12 +690,210 @@ func TestGroupFiltersDoNotLeakToParent(t T) T {
     return Eq(t, s.FilterCount(), 0)
 }
 
-func TestAuthCreation(t T) T {
-    val f = Auth()
-    return IsTrue(t, f != nil)
+func TestNestedGroups(t T) T {
+    val inner = NewGroup().GET("/detail", (req) => Ok("detail"))
+    val outer = NewGroup().
+        GET("/list", (req) => Ok("list")).
+        Group("/nested", inner)
+    val s = NewServer().Group("/api", outer)
+    return Eq(t, s.RouteCount(), 2)
 }
 
-func TestUnauthorized(t T) T {
-    val resp = Unauthorized("no access")
-    return Eq(t, resp.Code(), 401)
+// ============================================================================
+// Full Framework Configuration Test
+// ============================================================================
+
+// ============================================================================
+// HTTPError Tests
+// ============================================================================
+
+func TestHTTPErrorNewHTTPError(t T) T {
+    val err = NewHTTPError(StatusNotFound(), "user not found")
+    val t1 = Eq(t, err.Code(), 404)
+    val t2 = Eq(t1, err.Msg(), "user not found")
+    return IsNil(t2, err.Unwrap())
+}
+
+func TestHTTPErrorWithInternal(t T) T {
+    val internalErr error = nil
+    val err = NewHTTPErrorWithInternal(StatusInternalError(), "db error", internalErr)
+    val t1 = Eq(t, err.Code(), 500)
+    return Eq(t1, err.Msg(), "db error")
+}
+
+func TestHTTPErrorToResponse(t T) T {
+    val err = NewHTTPError(StatusBadRequest(), "invalid input")
+    val resp = err.ToResponse()
+    val t1 = Eq(t, resp.Code(), 400)
+    return Eq(t1, resp.Body, "invalid input")
+}
+
+func TestHTTPErrorToJsonResponse(t T) T {
+    val err = NewHTTPError(StatusNotFound(), "not found")
+    val resp = err.ToJsonResponse()
+    val t1 = Eq(t, resp.Code(), 404)
+    val t2 = Eq(t1, resp.HeaderValue("Content-Type"), "application/json")
+    val t3 = Contains(t2, resp.Body, "\"error\"")
+    return Contains(t3, resp.Body, "not found")
+}
+
+func TestHTTPErrorString(t T) T {
+    val err = NewHTTPError(StatusNotFound(), "not found")
+    val s = err.Error()
+    val t1 = Contains(t, s, "404")
+    return Contains(t1, s, "not found")
+}
+
+// ============================================================================
+// JSONP Response Tests
+// ============================================================================
+
+func TestJSONPResponse(t T) T {
+    val resp = JSONP("callback", "{\"name\": \"gala\"}")
+    val t1 = Eq(t, resp.Code(), 200)
+    val t2 = Eq(t1, resp.HeaderValue("Content-Type"), "application/javascript")
+    val t3 = Contains(t2, resp.Body, "callback")
+    return Contains(t3, resp.Body, "{\"name\": \"gala\"}")
+}
+
+func TestJSONPWithStatusResponse(t T) T {
+    val resp = JSONPWithStatus(StatusCreated(), "cb", "{\"id\": 1}")
+    val t1 = Eq(t, resp.Code(), 201)
+    return Contains(t1, resp.Body, "cb")
+}
+
+// ============================================================================
+// Blob Response Tests
+// ============================================================================
+
+func TestHTMLBlobResponse(t T) T {
+    val resp = HTMLBlob(httpcore.ToBytes("<h1>Hello</h1>"))
+    val t1 = Eq(t, resp.Code(), 200)
+    return Eq(t1, resp.HeaderValue("Content-Type"), "text/html")
+}
+
+func TestJSONBlobResponse(t T) T {
+    val resp = JSONBlob(httpcore.ToBytes("{\"ok\": true}"))
+    val t1 = Eq(t, resp.Code(), 200)
+    return Eq(t1, resp.HeaderValue("Content-Type"), "application/json")
+}
+
+func TestXMLBlobResponse(t T) T {
+    val resp = XMLBlob(httpcore.ToBytes("<root/>"))
+    val t1 = Eq(t, resp.Code(), 200)
+    return Eq(t1, resp.HeaderValue("Content-Type"), "application/xml")
+}
+
+func TestHTMLBlobWithStatusResponse(t T) T {
+    val resp = HTMLBlobWithStatus(StatusCreated(), httpcore.ToBytes("<p>Created</p>"))
+    return Eq(t, resp.Code(), 201)
+}
+
+func TestJSONBlobWithStatusResponse(t T) T {
+    val resp = JSONBlobWithStatus(StatusAccepted(), httpcore.ToBytes("{\"queued\": true}"))
+    return Eq(t, resp.Code(), 202)
+}
+
+func TestXMLBlobWithStatusResponse(t T) T {
+    val resp = XMLBlobWithStatus(StatusOk(), httpcore.ToBytes("<data/>"))
+    return Eq(t, resp.Code(), 200)
+}
+
+// ============================================================================
+// String Response Tests
+// ============================================================================
+
+func TestStringResponse(t T) T {
+    val resp = String(StatusOk(), "hello world")
+    val t1 = Eq(t, resp.Code(), 200)
+    val t2 = Eq(t1, resp.Body, "hello world")
+    return Eq(t2, resp.HeaderValue("Content-Type"), "text/plain")
+}
+
+func TestStringResponseWithCustomStatus(t T) T {
+    val resp = String(StatusCreated(), "created")
+    return Eq(t, resp.Code(), 201)
+}
+
+// ============================================================================
+// Stream Response Tests
+// ============================================================================
+
+func TestStreamResponse(t T) T {
+    val resp = Stream(StatusOk(), "text/event-stream", "data: hello\n\n")
+    val t1 = Eq(t, resp.Code(), 200)
+    val t2 = Eq(t1, resp.HeaderValue("Content-Type"), "text/event-stream")
+    return Contains(t2, resp.Body, "data: hello")
+}
+
+// ============================================================================
+// Route Naming Tests
+// ============================================================================
+
+func TestServerNamed(t T) T {
+    val s = NewServer().
+        GET("/users", (req) => Ok("users")).Named("user-list").
+        GET("/users/{id}", (req) => Ok("user")).Named("user-detail")
+    return Eq(t, s.RouteCount(), 2)
+}
+
+func TestServerURLGeneration(t T) T {
+    val s = NewServer().
+        GET("/users", (req) => Ok("users")).Named("user-list").
+        GET("/users/{id}", (req) => Ok("user")).Named("user-detail")
+    val t1 = IsSome(t, s.URL("user-list"))
+    val t2 = Eq(t1, s.URL("user-list").Get(), "/users")
+    val t3 = Eq(t2, s.URL("user-detail", "id", "42").Get(), "/users/42")
+    return IsNone(t3, s.URL("missing"))
+}
+
+// ============================================================================
+// Server Renderer/Validator Config Tests
+// ============================================================================
+
+func TestServerRenderWithoutRenderer(t T) T {
+    val s = NewServer()
+    val resp = s.Render("template", nil)
+    return Eq(t, resp.Code(), 500)
+}
+
+// ============================================================================
+// Full Framework Configuration Test
+// ============================================================================
+
+func TestFullFrameworkConfiguration(t T) T {
+    val api = NewGroup().
+        GET("/users", (req) => Ok("users")).
+        POST("/users", (req) => Created("ok")).
+        WithFilter(Auth())
+
+    val admin = NewGroup().
+        GET("/stats", (req) => Ok("stats")).
+        WithFilter(AuthBearer((token) => token == "admin"))
+
+    val s = NewServer().
+        WithName("Full API").
+        WithPort(9090).
+        WithShutdownTimeout(15 * time.Second).
+        WithDebug(true).
+        WithBanner(false).
+        WithErrorHandler((err) => JsonResponse(s"{\"error\": \"$err\"}")).
+        WithNotFound((req) => NotFound("custom 404")).
+        GET("/", (req) => Ok("Hello, GALA!")).
+        GET("/health", (req) => JsonResponse("{\"status\": \"ok\"}")).
+        Static("/public/", "./static").
+        Group("/api/v1", api).
+        Group("/admin", admin).
+        WithFilter(Logger()).
+        WithFilter(Recovery()).
+        WithFilter(Cors()).
+        WithFilter(RateLimit(1000.0, 100.0)).
+        WithFilter(RequestId())
+
+    val t1 = Eq(t, s.Port, 9090)
+    val t2 = Eq(t1, s.Name, "Full API")
+    val t3 = IsTrue(t2, s.Debug)
+    val t4 = IsFalse(t3, s.Banner)
+    val t5 = Eq(t4, s.RouteCount(), 5)
+    return Eq(t5, s.FilterCount(), 5)
 }

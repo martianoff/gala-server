@@ -1,6 +1,5 @@
-load("@gazelle//:def.bzl", "gazelle")
 load("@gala//:gala.bzl", "gala_go_test", "gala_transpile")
-load("@rules_go//go:def.bzl", "go_library")
+load("@gazelle//:def.bzl", "gazelle")
 
 exports_files(
     ["go.mod"],
@@ -58,23 +57,25 @@ filegroup(
     package_files = [s for s in _GALA_SRCS if s != src],
 ) for src in _GALA_SRCS]
 
-go_library(
-    name = "gala-server",
-    srcs = [src.replace(".gala", ".gen.go") for src in _GALA_SRCS],
-    importpath = "martianoff/gala-server",
-    visibility = ["//visibility:public"],
-    deps = [
-        "//httpcore",
-        "@gala//collection_immutable",
-        "@gala//concurrent",
-        "@gala//go_interop",
-        "@gala//std",
+gala_go_test(
+    name = "server_test",
+    srcs = ["server_test.gala"],
+    gala_deps = [
+        "//:gala-server",
     ],
 )
 
 gala_go_test(
-    name = "server_test",
-    srcs = ["server_test.gala"],
+    name = "filter_test",
+    srcs = ["filter_test.gala"],
+    gala_deps = [
+        "//:gala-server",
+    ],
+)
+
+gala_go_test(
+    name = "integration_test",
+    srcs = ["integration_test.gala"],
     gala_deps = [
         "//:gala-server",
     ],

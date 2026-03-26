@@ -1,6 +1,9 @@
 package server
 
-import . "martianoff/gala/concurrent"
+import (
+    . "martianoff/gala/collection_immutable"
+    . "martianoff/gala/concurrent"
+)
 
 // --- HTTP Method (sealed type) ---
 
@@ -66,3 +69,70 @@ type Handler func(Request) Future[Response]
 // Filter wraps a Handler with cross-cutting behavior (logging, recovery, CORS, etc.).
 // Filters are separate from routes — applied at Listen time.
 type Filter func(Request, Handler) Future[Response]
+
+// --- HTTPError (structured error type, equivalent to echo.HTTPError) ---
+
+// HTTPError is a structured error with an HTTP status code, message, and optional internal error.
+// Implements Go's error interface via Error() string.
+//
+//   val err = NewHTTPError(StatusNotFound(), "user not found")
+//   val resp = err.ToResponse()
+sealed type HTTPError {
+    case HTTPErr(Status StatusCode, Message string, Internal error)
+}
+
+// NewHTTPError creates an HTTPError with the given status and message.
+func NewHTTPError(status StatusCode, message string) HTTPError =
+    HTTPErr(status, message, nil)
+
+// NewHTTPErrorWithInternal creates an HTTPError with the given status, message, and internal error.
+func NewHTTPErrorWithInternal(status StatusCode, message string, internal error) HTTPError =
+    HTTPErr(status, message, internal)
+
+// Code returns the numeric HTTP status code.
+func (e HTTPError) Code() int = e match {
+    case HTTPErr(status, _, _) => status.Code()
+}
+
+// Msg returns the error message.
+func (e HTTPError) Msg() string = e match {
+    case HTTPErr(_, message, _) => message
+}
+
+// Unwrap returns the internal (wrapped) error, or nil.
+func (e HTTPError) Unwrap() error = e match {
+    case HTTPErr(_, _, internal) => internal
+}
+
+// Error returns the string representation (implements Go error interface).
+func (e HTTPError) Error() string = e match {
+    case HTTPErr(status, message, _) => s"code=${status.Code()}, message=$message"
+}
+
+// ToResponse converts the HTTPError to a Response.
+func (e HTTPError) ToResponse() Response = e match {
+    case HTTPErr(status, message, _) => NewResponse(status).WithBody(message)
+}
+
+// ToJsonResponse converts the HTTPError to a JSON response.
+func (e HTTPError) ToJsonResponse() Response = e match {
+    case HTTPErr(status, message, _) =>
+        JsonWithStatus(status, s"{\"error\": \"$message\", \"code\": ${status.Code()}}")
+}
+
+// --- Validator Interface (equivalent to echo.Validator) ---
+
+// Validator is an interface for struct validation.
+// Register a validator with the server to enable automatic validation after binding.
+type Validator interface {
+    Validate(i any) error
+}
+
+// --- Renderer Interface (equivalent to echo.Renderer) ---
+
+// Renderer is an interface for template rendering.
+// Implement this to render HTML templates with a template engine.
+type Renderer interface {
+    Render(name string, data any) string
+}
+

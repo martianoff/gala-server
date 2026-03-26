@@ -1,6 +1,11 @@
 package server
 
-import "github.com/martianoff/gala-server/httpcore"
+import (
+    . "martianoff/gala/collection_immutable"
+    "github.com/martianoff/gala-server/httpcore"
+    "strings"
+    "time"
+)
 
 // Server is an immutable HTTP server with builder-pattern configuration.
 //
@@ -9,11 +14,20 @@ import "github.com/martianoff/gala-server/httpcore"
 //       WithPort(9090).
 //       GET("/", handler).
 //       WithFilter(Logger()).
-//       Listen()
+//       WithErrorHandler((err) => InternalError(s"Oops: $err")).
+//       ListenGraceful()
 type Server struct {
-    root Group
-    Port int
-    Name string
+    root            Group
+    Port            int
+    Name            string
+    ErrorHandler    func(error) Response
+    NotFoundHandler func(Request) Response
+    Statics         Array[Tuple[string, string]]
+    ShutdownTimeout time.Duration
+    Debug           bool
+    Banner          bool
+    renderer        Option[Renderer]
+    validator       Option[Validator]
 }
 
 // NewServer creates an empty Server with default settings (port 8080).
@@ -21,79 +35,180 @@ func NewServer() Server = Server(
     root = NewGroup(),
     Port = 8080,
     Name = "GALA Server",
+    ErrorHandler = defaultErrorHandler,
+    NotFoundHandler = defaultNotFoundHandler,
+    Statics = EmptyArray[Tuple[string, string]](),
+    ShutdownTimeout = 30 * time.Second,
+    Debug = false,
+    Banner = true,
+    renderer = None[Renderer](),
+    validator = None[Validator](),
 )
+
+func defaultErrorHandler(err error) Response =
+    InternalError(s"Internal Server Error: $err")
+
+func defaultNotFoundHandler(req Request) Response =
+    NotFound(s"Not Found: ${req.Method().Name()} ${req.Path()}")
 
 // --- Configuration ---
 
-// WithPort sets the port the server listens on.
-func (s Server) WithPort(port int) Server = s.Copy(Port = port)
+func (s Server) copy(
+    root Group = s.root,
+    port int = s.Port,
+    name string = s.Name,
+    errHandler func(error) Response = s.ErrorHandler,
+    notFound func(Request) Response = s.NotFoundHandler,
+    statics Array[Tuple[string, string]] = s.Statics,
+    timeout time.Duration = s.ShutdownTimeout,
+    debug bool = s.Debug,
+    banner bool = s.Banner,
+    rndr Option[Renderer] = s.renderer,
+    vldr Option[Validator] = s.validator) Server = Server(root, port, name, errHandler, notFound, statics, timeout, debug, banner, rndr, vldr)
 
-// WithName sets the server name shown in the startup message.
-func (s Server) WithName(name string) Server = s.Copy(Name = name)
+// WithPort sets the port the server listens on.
+func (s Server) WithPort(port int) Server = s.copy(port = port)
+
+// WithName sets the server name shown in the startup banner.
+func (s Server) WithName(name string) Server = s.copy(name = name)
+
+// WithErrorHandler sets a custom error handler for unhandled errors.
+func (s Server) WithErrorHandler(handler func(error) Response) Server =
+    s.copy(errHandler = handler)
+
+// WithNotFound sets a custom handler for 404 Not Found responses.
+// Equivalent to Echo's e.HTTPErrorHandler for 404s.
+func (s Server) WithNotFound(handler func(Request) Response) Server =
+    s.copy(notFound = handler)
+
+// WithShutdownTimeout sets the graceful shutdown timeout duration.
+func (s Server) WithShutdownTimeout(timeout time.Duration) Server =
+    s.copy(timeout = timeout)
+
+// WithDebug enables debug mode (verbose logging, route listing on startup).
+func (s Server) WithDebug(enabled bool) Server = s.copy(debug = enabled)
+
+// WithBanner controls whether the startup banner is printed.
+func (s Server) WithBanner(enabled bool) Server = s.copy(banner = enabled)
+
+// WithRenderer sets the template renderer for the server.
+// Equivalent to Echo's e.Renderer.
+func (s Server) WithRenderer(r Renderer) Server = s.copy(rndr = Some(r))
+
+// WithValidator sets the struct validator for the server.
+// Equivalent to Echo's e.Validator.
+func (s Server) WithValidator(v Validator) Server = s.copy(vldr = Some(v))
+
+// Render renders a template using the registered Renderer and returns an HTML response.
+// Equivalent to Echo's c.Render().
+func (s Server) Render(name string, data any) Response =
+    s.renderer match {
+        case Some(r) => Html(r.Render(name, data))
+        case None() => InternalError("renderer not registered")
+    }
+
+// --- Static Files ---
+
+// Static registers a static file directory to be served under the given URL prefix.
+// Example: server.Static("/public/", "./static")
+func (s Server) Static(prefix string, dir string) Server =
+    s.copy(statics = s.Statics.Append((prefix, dir)))
 
 // --- Routing (delegates to root group) ---
 
 func (s Server) GET(pattern string, handler func(Request) Response, filters ...Filter) Server =
-    s.Copy(root = s.root.GET(pattern, handler, filters...))
+    s.copy(root = s.root.GET(pattern, handler, filters...))
 
 func (s Server) POST(pattern string, handler func(Request) Response, filters ...Filter) Server =
-    s.Copy(root = s.root.POST(pattern, handler, filters...))
+    s.copy(root = s.root.POST(pattern, handler, filters...))
 
 func (s Server) PUT(pattern string, handler func(Request) Response, filters ...Filter) Server =
-    s.Copy(root = s.root.PUT(pattern, handler, filters...))
+    s.copy(root = s.root.PUT(pattern, handler, filters...))
 
 func (s Server) DELETE(pattern string, handler func(Request) Response, filters ...Filter) Server =
-    s.Copy(root = s.root.DELETE(pattern, handler, filters...))
+    s.copy(root = s.root.DELETE(pattern, handler, filters...))
 
 func (s Server) PATCH(pattern string, handler func(Request) Response, filters ...Filter) Server =
-    s.Copy(root = s.root.PATCH(pattern, handler, filters...))
+    s.copy(root = s.root.PATCH(pattern, handler, filters...))
 
 func (s Server) HEAD(pattern string, handler func(Request) Response, filters ...Filter) Server =
-    s.Copy(root = s.root.HEAD(pattern, handler, filters...))
+    s.copy(root = s.root.HEAD(pattern, handler, filters...))
 
 func (s Server) OPTIONS(pattern string, handler func(Request) Response, filters ...Filter) Server =
-    s.Copy(root = s.root.OPTIONS(pattern, handler, filters...))
+    s.copy(root = s.root.OPTIONS(pattern, handler, filters...))
 
 func (s Server) Handle(method Method, pattern string, handler Handler, filters ...Filter) Server =
-    s.Copy(root = s.root.Handle(method, pattern, handler, filters...))
+    s.copy(root = s.root.Handle(method, pattern, handler, filters...))
+
+// Any registers a handler for ALL HTTP methods on the given pattern.
+func (s Server) Any(pattern string, handler func(Request) Response, filters ...Filter) Server =
+    ArrayOf(GET(), POST(), PUT(), DELETE(), PATCH(), HEAD(), OPTIONS()).FoldLeft(s, (acc, m) =>
+        acc.Handle(m, pattern, liftHandler(handler), filters...))
 
 // --- Filters ---
 
 // WithFilter returns a new Server with an additional global filter.
 func (s Server) WithFilter(f Filter) Server =
-    s.Copy(root = s.root.WithFilter(f))
+    s.copy(root = s.root.WithFilter(f))
 
 // --- Composition ---
 
 // Group mounts all routes from a Group under the given prefix.
 func (s Server) Group(prefix string, sub Group) Server =
-    s.Copy(root = s.root.Group(prefix, sub))
+    s.copy(root = s.root.Group(prefix, sub))
 
 // WithRoutes copies all routes from a Group (no prefix).
 func (s Server) WithRoutes(sub Group) Server =
-    s.Copy(root = s.root.WithRoutes(sub))
+    s.copy(root = s.root.WithRoutes(sub))
+
+// --- Route Naming ---
+
+// NameRoute sets a name on the last registered route.
+// Equivalent to Echo's e.GET("/", handler).Name = "home"
+func (s Server) Named(name string) Server {
+    val routes = s.root.Routes
+    if routes.IsEmpty() {
+        return s
+    }
+    val last = routes.Last()
+    val named = Route(last.Method, last.Pattern, last.Handler, name)
+    val updated = routes.Init().Append(named)
+    val newRoot = Group(Routes = updated, Filters = s.root.Filters)
+    return s.copy(root = newRoot)
+}
+
+// URL generates a URL for a named route by substituting path parameters.
+// Parameters are provided as key-value pairs: URL("user", "id", "42")
+// Returns None if no route with the given name exists.
+func (s Server) URL(name string, params ...string) Option[string] =
+    s.root.Routes.Find((r) => r.Name == name).Map((r) => {
+        var path = r.Pattern
+        var i = 0
+        for i < len(params) - 1 {
+            path = strings.Replace(path, s"{${params[i]}}", params[i + 1], 1)
+            i = i + 2
+        }
+        return path
+    })
 
 // --- Queries ---
 
 func (s Server) RouteCount() int = s.root.RouteCount()
-
 func (s Server) FilterCount() int = s.root.FilterCount()
+
+// Routes returns a description of all registered routes (for debugging).
+func (s Server) Routes() Array[string] =
+    s.root.Routes.Map((route) => s"${route.Method.Name()} ${route.Pattern}")
 
 // --- Listen ---
 
 // Listen starts the HTTP server on the configured port.
 func (s Server) Listen() Try[bool] = s.ListenOn(s":${s.Port}")
 
-// ListenOn starts the HTTP server on the given address (e.g. ":9090", "0.0.0.0:80").
+// ListenOn starts the HTTP server on the given address.
 func (s Server) ListenOn(addr string) Try[bool] {
-    val sb = httpcore.NewServerBuilder()
-
-    s.root.Routes.ForEach((route) => {
-        val handler = applyFilters(route.Handler, s.root.Filters)
-        sb.AddRoute(route.Method.Name(), route.Pattern, makeBridgeHandler(handler))
-    })
-
-    Println(s"${s.Name} listening on $addr")
+    val sb = s.buildServerBuilder()
+    s.printBanner(addr, false)
     val err = sb.ListenAndServe(addr)
     if err != nil {
         return Failure[bool](err)
@@ -101,12 +216,64 @@ func (s Server) ListenOn(addr string) Try[bool] {
     return Success(true)
 }
 
-func makeBridgeHandler(handler Handler) httpcore.BridgeHandler {
-    return (br httpcore.BridgeRequest) => {
+// ListenGraceful starts the HTTP server with graceful shutdown on SIGINT/SIGTERM.
+func (s Server) ListenGraceful() Try[bool] = s.ListenGracefulOn(s":${s.Port}")
+
+// ListenGracefulOn starts the server with graceful shutdown on the given address.
+func (s Server) ListenGracefulOn(addr string) Try[bool] {
+    val sb = s.buildServerBuilder()
+    s.printBanner(addr, true)
+    val err = sb.ListenAndServeGraceful(addr, s.ShutdownTimeout)
+    if err != nil {
+        return Failure[bool](err)
+    }
+    return Success(true)
+}
+
+// --- Internal ---
+
+func (s Server) buildServerBuilder() *httpcore.ServerBuilder {
+    val sb = httpcore.NewServerBuilder()
+    val errHandler = s.ErrorHandler
+
+    // Register static routes
+    s.Statics.ForEach((pair) => sb.AddStatic(pair.V1, pair.V2))
+
+    // Register API routes
+    s.root.Routes.ForEach((route) => {
+        val handler = applyFilters(route.Handler, s.root.Filters)
+        sb.AddRoute(route.Method.Name(), route.Pattern, makeBridgeHandler(handler, errHandler))
+    })
+
+    return sb
+}
+
+func (s Server) printBanner(addr string, graceful bool) {
+    if !s.Banner {
+        return
+    }
+    Println("")
+    Println(s"   ${s.Name}")
+    Println(s"   Listening on $addr")
+    if graceful {
+        Println(s"   Graceful shutdown: ${s.ShutdownTimeout}")
+    }
+    Println(s"   Routes: ${s.RouteCount()}, Filters: ${s.FilterCount()}, Static: ${s.Statics.Size()}")
+    if s.Debug {
+        Println("   Routes:")
+        s.root.Routes.ForEach((route) =>
+            Println(s"     ${route.Method.Name()} ${route.Pattern}"))
+        s.Statics.ForEach((pair) =>
+            Println(s"     STATIC ${pair.V1} -> ${pair.V2}"))
+    }
+    Println("")
+}
+
+func makeBridgeHandler(handler Handler, errHandler func(error) Response) httpcore.BridgeHandler =
+    (br httpcore.BridgeRequest) => {
         val req = Request(bridge = br)
         return handler(req).Await() match {
             case Success(resp) => resp.ToBridge()
-            case Failure(err) => httpcore.NewBridgeResponse(500, s"Internal Server Error: $err")
+            case Failure(err) => errHandler(err).ToBridge()
         }
     }
-}

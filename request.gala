@@ -1,6 +1,11 @@
 package server
 
-import "github.com/martianoff/gala-server/httpcore"
+import (
+    "github.com/martianoff/gala-server/httpcore"
+    . "martianoff/gala/json"
+    . "martianoff/gala/collection_immutable"
+    "strconv"
+)
 
 // Request is a GALA-native immutable HTTP request.
 // It wraps the thin Go bridge internally — users never see httpcore types.
@@ -20,6 +25,27 @@ func (r Request) RawQuery() string = r.bridge.RawQuery
 // Body returns the request body as a string.
 func (r Request) Body() string = r.bridge.Body
 
+// RemoteAddr returns the client's remote address (may include port).
+func (r Request) RemoteAddr() string = r.bridge.RemoteAddr()
+
+// RealIP returns the real client IP, considering X-Real-IP and X-Forwarded-For headers.
+// Equivalent to Echo's c.RealIP().
+func (r Request) RealIP() string = r.bridge.RealIP()
+
+// Host returns the host from the request (e.g. "example.com:8080").
+func (r Request) Host() string = r.bridge.Host()
+
+// Scheme returns "http" or "https". Checks X-Forwarded-Proto for proxy support.
+func (r Request) Scheme() string = r.bridge.Scheme()
+
+// IsTLS returns true if the connection is using TLS.
+func (r Request) IsTLS() bool = r.bridge.IsTLS()
+
+// IsWebSocket returns true if this is a WebSocket upgrade request.
+func (r Request) IsWebSocket() bool = r.bridge.IsWebSocket()
+
+// --- Path Parameters ---
+
 // Param returns a path parameter by name.
 // Example: for pattern "/users/{id}", req.Param("id") returns Some("123").
 func (r Request) Param(name string) Option[string] {
@@ -30,8 +56,27 @@ func (r Request) Param(name string) Option[string] {
     return Some(v)
 }
 
-// QueryParam returns a query parameter by name.
-// Example: for URL "/search?q=gala", req.QueryParam("q") returns Some("gala").
+// ParamInt returns a path parameter as an int.
+func (r Request) ParamInt(name string) Option[int] {
+    val v = r.bridge.PathValue(name)
+    if v == "" {
+        return None[int]()
+    }
+    return Try(() => strconv.Atoi(v)).ToOption()
+}
+
+// ParamInt64 returns a path parameter as an int64.
+func (r Request) ParamInt64(name string) Option[int64] {
+    val v = r.bridge.PathValue(name)
+    if v == "" {
+        return None[int64]()
+    }
+    return Try(() => strconv.ParseInt(v, 10, 64)).ToOption()
+}
+
+// --- Query Parameters ---
+
+// QueryParam returns a single query parameter by name.
 func (r Request) QueryParam(name string) Option[string] {
     val v = r.bridge.QueryValue(name)
     if v == "" {
@@ -40,8 +85,36 @@ func (r Request) QueryParam(name string) Option[string] {
     return Some(v)
 }
 
+// QueryParamInt returns a query parameter as an int.
+func (r Request) QueryParamInt(name string) Option[int] {
+    val v = r.bridge.QueryValue(name)
+    if v == "" {
+        return None[int]()
+    }
+    return Try(() => strconv.Atoi(v)).ToOption()
+}
+
+// QueryParamDefault returns a query parameter, falling back to a default.
+func (r Request) QueryParamDefault(name string, default_ string) string =
+    r.QueryParam(name).GetOrElse(default_)
+
+// QueryParams returns all query parameter values for a given name.
+// Useful for repeated parameters like ?tag=a&tag=b.
+func (r Request) QueryParams(name string) Array[string] {
+    val qp = r.bridge.AllQueryParams()
+    if qp == nil {
+        return EmptyArray[string]()
+    }
+    val values = qp[name]
+    if values == nil {
+        return EmptyArray[string]()
+    }
+    return ArrayOf(values...)
+}
+
+// --- Headers ---
+
 // Header returns a header value by name (case-insensitive).
-// Example: req.Header("Content-Type") returns Some("application/json").
 func (r Request) Header(name string) Option[string] {
     val v = r.bridge.HeaderValue(name)
     if v == "" {
@@ -52,6 +125,95 @@ func (r Request) Header(name string) Option[string] {
 
 // ContentType returns the Content-Type header value.
 func (r Request) ContentType() Option[string] = r.Header("Content-Type")
+
+// --- Form Data ---
+
+// FormValue returns a form value by name (works for both URL-encoded and multipart).
+func (r Request) FormValue(name string) Option[string] {
+    val v = r.bridge.FormValue(name)
+    if v == "" {
+        return None[string]()
+    }
+    return Some(v)
+}
+
+// FormParams returns all form values for a given name.
+func (r Request) FormParams(name string) Array[string] {
+    val fp = r.bridge.AllFormParams()
+    if fp == nil {
+        return EmptyArray[string]()
+    }
+    val values = fp[name]
+    if values == nil {
+        return EmptyArray[string]()
+    }
+    return ArrayOf(values...)
+}
+
+// --- Cookies ---
+
+// Cookie returns a cookie value by name.
+func (r Request) Cookie(name string) Option[string] {
+    val v, ok = r.bridge.CookieValue(name)
+    if !ok {
+        return None[string]()
+    }
+    return Some(v)
+}
+
+// --- JSON Body Parsing (Bind) ---
+
+// BindJson parses the request body as JSON into type T using the given codec.
+// Equivalent to Echo's c.Bind() for JSON content.
+//
+//   req.BindJson(userCodec) match {
+//       case Success(user) => JsonFrom(user, userCodec)
+//       case Failure(err) => BadRequest(s"Invalid: $err")
+//   }
+func BindJson[T any](r Request, codec JsonEncoder[T]) Try[T] =
+    codec.Decode(r.Body())
+
+// JsonBody is an alias for BindJson (backward compatibility).
+func JsonBody[T any](r Request, codec JsonEncoder[T]) Try[T] =
+    BindJson[T](r, codec)
+
+// --- Context Values ---
+
+// CtxGet retrieves a string value from the per-request context.
+func (r Request) CtxGet(key string) Option[string] {
+    val v, ok = r.bridge.CtxValues().GetString(key)
+    if !ok {
+        return None[string]()
+    }
+    return Some(v)
+}
+
+// CtxGetInt retrieves an int value from the per-request context.
+func (r Request) CtxGetInt(key string) Option[int] {
+    val v, ok = r.bridge.CtxValues().GetInt(key)
+    if !ok {
+        return None[int]()
+    }
+    return Some(v)
+}
+
+// CtxSet stores a value in the per-request context.
+// Note: This mutates the underlying context store (shared across filters for this request).
+func (r Request) CtxSet(key string, value any) {
+    r.bridge.CtxValues().Set(key, value)
+}
+
+// --- Request Cloning (for filters that modify requests) ---
+
+// WithMethod returns a new Request with a different HTTP method.
+// Used by MethodOverride filter.
+func (r Request) WithMethod(method string) Request =
+    Request(bridge = httpcore.CloneBridgeRequestWithMethod(r.bridge, method))
+
+// WithBody returns a new Request with a different body.
+// Used by Decompress filter.
+func (r Request) WithBody(body string) Request =
+    Request(bridge = httpcore.CloneBridgeRequestWithBody(r.bridge, body))
 
 // --- Internal ---
 

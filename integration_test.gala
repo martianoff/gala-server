@@ -1,0 +1,240 @@
+package server
+
+import (
+    . "martianoff/gala/test"
+    . "martianoff/gala/concurrent"
+    "github.com/martianoff/gala-server/httpcore"
+    "time"
+)
+
+// --- Helpers ---
+
+// startTestServer starts a server on a known port and returns the base URL.
+func startTestServer(s Server) string {
+    val sb = httpcore.NewServerBuilder()
+
+    s.root.Routes.ForEach((route) => {
+        val handler = applyFilters(route.Handler, s.root.Filters)
+        sb.AddRoute(route.Method.Name(), route.Pattern, makeBridgeHandler(handler, s.ErrorHandler))
+    })
+
+    val addr = ":18923"
+    Spawn(() => sb.ListenAndServe(addr))
+    time.Sleep(100 * time.Millisecond)
+    return s"http://localhost$addr"
+}
+
+// --- Integration Tests ---
+
+func TestIntegrationBasicGET(t T) T {
+    val s = NewServer().
+        GET("/hello", (req) => Ok("Hello, World!")).
+        GET("/json", (req) => JsonResponse("{\"message\": \"hi\"}"))
+
+    val base = startTestServer(s)
+
+    val r1 = httpcore.HTTPGet(s"$base/hello")
+    val t1 = Eq(t, r1.Status, 200)
+    val t2 = Eq(t1, r1.Body, "Hello, World!")
+
+    val r2 = httpcore.HTTPGet(s"$base/json")
+    val t3 = Eq(t2, r2.Status, 200)
+    return Eq(t3, r2.Body, "{\"message\": \"hi\"}")
+}
+
+func TestIntegrationPathParams(t T) T {
+    val s = NewServer().
+        GET("/users/{id}", (req) => {
+            val id = req.Param("id").GetOrElse("0")
+            return Ok(s"user: $id")
+        })
+
+    val base = startTestServer(s)
+
+    val r = httpcore.HTTPGet(s"$base/users/42")
+    val t1 = Eq(t, r.Status, 200)
+    return Eq(t1, r.Body, "user: 42")
+}
+
+func TestIntegrationQueryParams(t T) T {
+    val s = NewServer().
+        GET("/search", (req) => {
+            val q = req.QueryParam("q").GetOrElse("none")
+            return Ok(s"query: $q")
+        })
+
+    val base = startTestServer(s)
+
+    val r = httpcore.HTTPGet(s"$base/search?q=gala")
+    val t1 = Eq(t, r.Status, 200)
+    return Eq(t1, r.Body, "query: gala")
+}
+
+func TestIntegrationPOSTBody(t T) T {
+    val s = NewServer().
+        POST("/echo", (req) => Ok(req.Body()))
+
+    val base = startTestServer(s)
+
+    val r = httpcore.HTTPPost(s"$base/echo", "text/plain", "hello from client")
+    val t1 = Eq(t, r.Status, 200)
+    return Eq(t1, r.Body, "hello from client")
+}
+
+func TestIntegrationLoggerFilter(t T) T {
+    val s = NewServer().
+        GET("/logged", (req) => Ok("logged")).
+        WithFilter(Logger())
+
+    val base = startTestServer(s)
+
+    val r = httpcore.HTTPGet(s"$base/logged")
+    val t1 = Eq(t, r.Status, 200)
+    return Eq(t1, r.Body, "logged")
+}
+
+func TestIntegrationRecoveryFilter(t T) T {
+    val s = NewServer().
+        GET("/panic", (req) => {
+            panic("test panic")
+            return Ok("never")
+        }).
+        WithFilter(Recovery())
+
+    val base = startTestServer(s)
+
+    val r = httpcore.HTTPGet(s"$base/panic")
+    return Eq(t, r.Status, 500)
+}
+
+func TestIntegrationAuthFilter(t T) T {
+    val s = NewServer().
+        GET("/secret", (req) => Ok("secret data"), Auth())
+
+    val base = startTestServer(s)
+
+    // Without auth header -> 401
+    val r1 = httpcore.HTTPGet(s"$base/secret")
+    val t1 = Eq(t, r1.Status, 401)
+
+    // With auth header -> 200
+    val r2 = httpcore.HTTPGetWithHeader(s"$base/secret", "Authorization", "Bearer token123")
+    val t2 = Eq(t1, r2.Status, 200)
+    return Eq(t2, r2.Body, "secret data")
+}
+
+func TestIntegrationCorsFilter(t T) T {
+    val s = NewServer().
+        GET("/cors", (req) => Ok("cors")).
+        WithFilter(Cors())
+
+    val base = startTestServer(s)
+
+    val r = httpcore.HTTPDo("GET", s"$base/cors")
+    return Eq(t, r.HeaderValue("Access-Control-Allow-Origin"), "*")
+}
+
+func TestIntegrationGroupRoutes(t T) T {
+    val api = NewGroup().
+        GET("/users", (req) => Ok("users list")).
+        POST("/users", (req) => Created("user created"))
+
+    val s = NewServer().
+        GET("/health", (req) => Ok("ok")).
+        Group("/api/v1", api)
+
+    val base = startTestServer(s)
+
+    val r1 = httpcore.HTTPGet(s"$base/health")
+    val t1 = Eq(t, r1.Status, 200)
+    val t2 = Eq(t1, r1.Body, "ok")
+
+    val r2 = httpcore.HTTPGet(s"$base/api/v1/users")
+    val t3 = Eq(t2, r2.Status, 200)
+    return Eq(t3, r2.Body, "users list")
+}
+
+func TestIntegrationRequestContext(t T) T {
+    val setUserFilter Filter = (req Request, next Handler) => {
+        req.CtxSet("user", "alice")
+        return next(req)
+    }
+
+    val s = NewServer().
+        GET("/ctx", (req) => {
+            val user = req.CtxGet("user").GetOrElse("anonymous")
+            return Ok(s"user: $user")
+        }).
+        WithFilter(setUserFilter)
+
+    val base = startTestServer(s)
+
+    val r = httpcore.HTTPGet(s"$base/ctx")
+    val t1 = Eq(t, r.Status, 200)
+    return Eq(t1, r.Body, "user: alice")
+}
+
+func TestIntegrationCookies(t T) T {
+    val s = NewServer().
+        GET("/set-cookie", (req) => {
+            return Ok("cookie set").SetCookie("session", "abc123")
+        })
+
+    val base = startTestServer(s)
+
+    val r = httpcore.HTTPDo("GET", s"$base/set-cookie")
+    val t1 = IsTrue(t, r.CookieCount() > 0)
+    if r.CookieCount() > 0 {
+        val t2 = Eq(t1, r.CookieName(0), "session")
+        return Eq(t2, r.CookieValue(0), "abc123")
+    }
+    return t1
+}
+
+func TestIntegrationCustomErrorHandler(t T) T {
+    val s = NewServer().
+        WithErrorHandler((err) => JsonResponse("{\"error\": \"custom\"}")).
+        GET("/fail", (req) => {
+            panic("oops")
+            return Ok("never")
+        }).
+        WithFilter(Recovery())
+
+    val base = startTestServer(s)
+
+    val r = httpcore.HTTPGet(s"$base/fail")
+    return Eq(t, r.Status, 500)
+}
+
+func TestIntegrationResponseHeaders(t T) T {
+    val s = NewServer().
+        GET("/headers", (req) => {
+            return Ok("hello").
+                WithHeader("X-Custom", "test-value").
+                WithHeader("X-Version", "1.0")
+        })
+
+    val base = startTestServer(s)
+
+    val r = httpcore.HTTPDo("GET", s"$base/headers")
+    val t1 = Eq(t, r.HeaderValue("X-Custom"), "test-value")
+    return Eq(t1, r.HeaderValue("X-Version"), "1.0")
+}
+
+func TestIntegrationContentTypes(t T) T {
+    val s = NewServer().
+        GET("/text", (req) => Text("plain")).
+        GET("/html", (req) => Html("<h1>Hi</h1>")).
+        GET("/json", (req) => JsonResponse("{\"ok\": true}"))
+
+    val base = startTestServer(s)
+
+    val r1 = httpcore.HTTPDo("GET", s"$base/text")
+    val t1 = Eq(t, r1.HeaderValue("Content-Type"), "text/plain")
+
+    val r2 = httpcore.HTTPDo("GET", s"$base/html")
+    val t2 = Eq(t1, r2.HeaderValue("Content-Type"), "text/html")
+
+    val r3 = httpcore.HTTPDo("GET", s"$base/json")
+    return Eq(t2, r3.HeaderValue("Content-Type"), "application/json")
+}

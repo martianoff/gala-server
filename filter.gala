@@ -1,77 +1,578 @@
 package server
 
 import (
+    . "martianoff/gala/collection_immutable"
     . "martianoff/gala/concurrent"
+    "github.com/martianoff/gala-server/httpcore"
+    "strings"
     "time"
 )
+
+// ========================
+// Logger Filter
+// ========================
 
 // Logger returns a filter that logs each request with method, path, status, and duration.
 func Logger() Filter = loggerFilter
 
 func loggerFilter(req Request, next Handler) Future[Response] {
     val start = time.Now()
-    val result = next(req).Await()
-    val duration = time.Since(start)
-    return result match {
-        case Success(resp) => {
-            Println(s"${req.Method().Name()} ${req.Path()} -> ${resp.Code()} ($duration)")
-            FutureOf[Response](resp)
-        }
-        case Failure(err) => {
-            Println(s"${req.Method().Name()} ${req.Path()} -> ERROR ($duration)")
-            FutureFailed[Response](err)
-        }
-    }
+    return next(req).Map((resp) => {
+        Println(s"${req.Method().Name()} ${req.Path()} -> ${resp.Code()} (${time.Since(start)})")
+        return resp
+    })
 }
+
+// LoggerWithFormat returns a logger filter with a custom format function.
+// The function receives (method, path, status, duration) and returns the log line.
+func LoggerWithFormat(format func(string, string, int, time.Duration) string) Filter =
+    (req Request, next Handler) => {
+        val start = time.Now()
+        return next(req).Map((resp) => {
+            Println(format(req.Method().Name(), req.Path(), resp.Code(), time.Since(start)))
+            return resp
+        })
+    }
+
+// ========================
+// Recovery Filter
+// ========================
 
 // Recovery returns a filter that catches handler failures and returns a 500 response.
 func Recovery() Filter = recoveryFilter
 
 func recoveryFilter(req Request, next Handler) Future[Response] =
-    next(req).Await() match {
-        case Success(resp) => FutureOf[Response](resp)
-        case Failure(err) => {
-            Println(s"PANIC recovered: $err")
-            FutureOf[Response](InternalError("Internal Server Error"))
-        }
-    }
+    next(req).Recover((err) => {
+        Println(s"PANIC recovered: $err")
+        return InternalError("Internal Server Error")
+    })
+
+// ========================
+// CORS Filter
+// ========================
 
 // Cors returns a filter that adds CORS headers allowing all origins (*).
-func Cors() Filter = corsFilter
-
-func corsFilter(req Request, next Handler) Future[Response] =
-    addCorsHeaders(req, next, "*")
+// Automatically handles OPTIONS preflight requests.
+func Cors() Filter = CorsWithConfig("*", "GET, POST, PUT, DELETE, PATCH, OPTIONS", "Content-Type, Authorization", "86400")
 
 // CorsWithOrigins returns a CORS filter restricted to the given origin.
 func CorsWithOrigins(origin string) Filter =
-    (req Request, next Handler) => addCorsHeaders(req, next, origin)
+    CorsWithConfig(origin, "GET, POST, PUT, DELETE, PATCH, OPTIONS", "Content-Type, Authorization", "86400")
+
+// CorsWithConfig returns a CORS filter with full configuration.
+func CorsWithConfig(origins string, methods string, headers string, maxAge string) Filter =
+    (req Request, next Handler) => {
+        // Handle preflight OPTIONS requests immediately
+        if req.Method() == OPTIONS() {
+            return FutureOf(
+                NoContent().
+                    WithHeader("Access-Control-Allow-Origin", origins).
+                    WithHeader("Access-Control-Allow-Methods", methods).
+                    WithHeader("Access-Control-Allow-Headers", headers).
+                    WithHeader("Access-Control-Max-Age", maxAge))
+        }
+        return next(req).Map((resp) =>
+            resp.WithHeader("Access-Control-Allow-Origin", origins).
+                WithHeader("Access-Control-Allow-Methods", methods).
+                WithHeader("Access-Control-Allow-Headers", headers))
+    }
+
+// ========================
+// Auth Filter
+// ========================
 
 // Auth returns a filter that checks for an Authorization header.
 // Returns 401 Unauthorized if the header is missing.
 func Auth() Filter = authFilter
 
-func authFilter(req Request, next Handler) Future[Response] =
-    req.Header("Authorization") match {
-        case Some(_) => next(req)
-        case None() => FutureOf[Response](Unauthorized("Unauthorized"))
+func authFilter(req Request, next Handler) Future[Response] {
+    val auth = req.Header("Authorization").GetOrElse("")
+    if auth != "" {
+        return next(req)
     }
+    return FutureOf(Unauthorized("Unauthorized"))
+}
 
 // AuthWithValidator returns a filter that validates the Authorization header using a custom function.
 // The validator receives the header value and returns true if valid.
 func AuthWithValidator(validate func(string) bool) Filter =
-    (req Request, next Handler) => checkAuth(req, next, validate)
-
-func checkAuth(req Request, next Handler, validate func(string) bool) Future[Response] =
-    req.Header("Authorization") match {
-        case Some(token) if validate(token) => next(req)
-        case _ => FutureOf[Response](Unauthorized("Unauthorized"))
+    (req Request, next Handler) => {
+        val auth = req.Header("Authorization").GetOrElse("")
+        if auth != "" && validate(auth) {
+            return next(req)
+        }
+        return FutureOf(Unauthorized("Unauthorized"))
     }
 
-func addCorsHeaders(req Request, next Handler, origin string) Future[Response] =
-    next(req).Await() match {
-        case Success(resp) => FutureOf[Response](
-            resp.WithHeader("Access-Control-Allow-Origin", origin).
-                WithHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, PATCH, OPTIONS").
-                WithHeader("Access-Control-Allow-Headers", "Content-Type, Authorization"))
-        case Failure(err) => FutureFailed[Response](err)
+// AuthBearer returns a filter that validates Bearer tokens.
+// The validator receives the token (without "Bearer " prefix) and returns true if valid.
+func AuthBearer(validate func(string) bool) Filter =
+    (req Request, next Handler) => {
+        val header = req.Header("Authorization").GetOrElse("")
+        if header != "" && strings.HasPrefix(header, "Bearer ") {
+            val token = strings.TrimPrefix(header, "Bearer ")
+            if validate(token) {
+                return next(req)
+            }
+            return FutureOf(Unauthorized("Invalid token"))
+        }
+        return FutureOf(Unauthorized("Missing Bearer token"))
+    }
+
+// BasicAuth returns a filter that validates HTTP Basic Authentication.
+// The validator receives (username, password) and returns true if valid.
+func BasicAuth(validate func(string, string) bool) Filter =
+    (req Request, next Handler) => {
+        val header = req.Header("Authorization").GetOrElse("")
+        if header != "" && strings.HasPrefix(header, "Basic ") {
+            val decoded = httpcore.DecodeBasicAuth(header)
+            if decoded.Valid && validate(decoded.Username, decoded.Password) {
+                req.CtxSet("username", decoded.Username)
+                return next(req)
+            }
+            return FutureOf(Unauthorized("Invalid credentials").
+                WithHeader("WWW-Authenticate", "Basic realm=\"Restricted\""))
+        }
+        return FutureOf(Unauthorized("Authentication required").
+            WithHeader("WWW-Authenticate", "Basic realm=\"Restricted\""))
+    }
+
+// KeyAuth returns a filter that validates API key authentication.
+// keyLookup specifies where to find the key: "header:X-API-Key", "query:api_key".
+// The validator receives the key value and returns true if valid.
+func KeyAuth(keyLookup string, validate func(string) bool) Filter =
+    (req Request, next Handler) => {
+        val k = extractKey(req, keyLookup).GetOrElse("")
+        if k != "" && validate(k) {
+            return next(req)
+        }
+        return FutureOf(Unauthorized("Invalid API key"))
+    }
+
+func extractKey(req Request, keyLookup string) Option[string] {
+    val parts = strings.SplitN(keyLookup, ":", 2)
+    if len(parts) != 2 {
+        return None[string]()
+    }
+    val source = parts[0]
+    val name = parts[1]
+    return source match {
+        case "header" => req.Header(name)
+        case "query" => req.QueryParam(name)
+        case "cookie" => req.Cookie(name)
+        case _ => None[string]()
+    }
+}
+
+// ========================
+// Rate Limiting Filter
+// ========================
+
+// RateLimit returns a filter that limits requests using a global token bucket.
+// maxRequests is the burst capacity, refillPerSecond is the refill rate.
+func RateLimit(maxRequests float64, refillPerSecond float64) Filter {
+    val limiter = httpcore.NewTokenBucket(maxRequests, refillPerSecond)
+    return (req Request, next Handler) => {
+        if limiter.Allow() {
+            return next(req)
+        }
+        return FutureOf(
+            TooManyRequests("Rate limit exceeded").
+                WithHeader("Retry-After", "1"))
+    }
+}
+
+// RateLimitPerIP returns a filter that limits requests per client IP.
+func RateLimitPerIP(maxRequests float64, refillPerSecond float64) Filter {
+    val limiter = httpcore.NewPerIPRateLimiter(maxRequests, refillPerSecond)
+    return (req Request, next Handler) => {
+        val ip = req.RealIP()
+        if limiter.AllowIP(ip) {
+            return next(req)
+        }
+        return FutureOf(
+            TooManyRequests("Rate limit exceeded").
+                WithHeader("Retry-After", "1"))
+    }
+}
+
+// ========================
+// Timeout Filter
+// ========================
+
+// Timeout returns a filter that cancels the handler after the given duration.
+func Timeout(duration time.Duration) Filter =
+    (req Request, next Handler) => {
+        val result = next(req)
+        val timeout = FutureApply(() => {
+            time.Sleep(duration)
+            return RequestTimeout().WithBody("Request Timeout")
+        })
+        return result.Fallback(timeout)
+    }
+
+// ========================
+// Compression Filter (Gzip)
+// ========================
+
+// Gzip returns a filter that compresses response bodies using gzip
+// when the client sends Accept-Encoding: gzip.
+func Gzip() Filter = gzipFilter
+
+func gzipFilter(req Request, next Handler) Future[Response] {
+    val acceptEnc = req.Header("Accept-Encoding").GetOrElse("")
+    if !httpcore.AcceptsGzip(acceptEnc) {
+        return next(req)
+    }
+    return next(req).Map((resp) => {
+        if resp.Body == "" {
+            return resp
+        }
+        return resp.
+            WithHeader("Content-Encoding", "gzip").
+            WithHeader("Vary", "Accept-Encoding")
+    })
+}
+
+// ========================
+// Request ID Filter
+// ========================
+
+// RequestId returns a filter that generates a unique request ID and stores it
+// in the request context as "request-id" and adds it to the response as X-Request-ID header.
+func RequestId() Filter {
+    val counter = httpcore.NewAtomicCounter()
+    return (req Request, next Handler) => {
+        val id = s"req-${counter.Next()}"
+        req.CtxSet("request-id", id)
+        return next(req).Map((resp) => resp.WithHeader("X-Request-ID", id))
+    }
+}
+
+// ========================
+// Secure Filter (Security Headers)
+// ========================
+
+// Secure returns a filter that adds security headers to every response.
+// Equivalent to Echo's Secure middleware.
+func Secure() Filter = SecureWithConfig(
+    xssProtection = "1; mode=block",
+    contentTypeNosniff = "nosniff",
+    xFrameOptions = "SAMEORIGIN",
+    hstsMaxAge = 0,
+    contentSecurityPolicy = "",
+    referrerPolicy = "",
+)
+
+// SecureWithConfig returns a security headers filter with custom configuration.
+func SecureWithConfig(
+    xssProtection string = "1; mode=block",
+    contentTypeNosniff string = "nosniff",
+    xFrameOptions string = "SAMEORIGIN",
+    hstsMaxAge int = 0,
+    contentSecurityPolicy string = "",
+    referrerPolicy string = "") Filter =
+    (req Request, next Handler) => next(req).Map((resp) => {
+        var r = resp
+        if xssProtection != "" {
+            r = r.WithHeader("X-XSS-Protection", xssProtection)
+        }
+        if contentTypeNosniff != "" {
+            r = r.WithHeader("X-Content-Type-Options", contentTypeNosniff)
+        }
+        if xFrameOptions != "" {
+            r = r.WithHeader("X-Frame-Options", xFrameOptions)
+        }
+        if hstsMaxAge > 0 {
+            r = r.WithHeader("Strict-Transport-Security", s"max-age=$hstsMaxAge; includeSubDomains")
+        }
+        if contentSecurityPolicy != "" {
+            r = r.WithHeader("Content-Security-Policy", contentSecurityPolicy)
+        }
+        if referrerPolicy != "" {
+            r = r.WithHeader("Referrer-Policy", referrerPolicy)
+        }
+        return r
+    })
+
+// ========================
+// Body Limit Filter
+// ========================
+
+// BodyLimit returns a filter that rejects requests whose body exceeds the given byte limit.
+// Example: BodyLimit("2M") for 2 megabytes, BodyLimit("1K") for 1 kilobyte.
+func BodyLimit(limit string) Filter {
+    val maxBytes = httpcore.ParseByteSize(limit)
+    return (req Request, next Handler) => {
+        if len(req.Body()) > maxBytes {
+            return FutureOf(
+                NewResponse(StatusCustom(413)).
+                    WithBody("Request Entity Too Large"))
+        }
+        return next(req)
+    }
+}
+
+// BodyLimitBytes returns a filter that rejects requests whose body exceeds the given byte count.
+func BodyLimitBytes(maxBytes int) Filter =
+    (req Request, next Handler) => {
+        if len(req.Body()) > maxBytes {
+            return FutureOf(
+                NewResponse(StatusCustom(413)).
+                    WithBody("Request Entity Too Large"))
+        }
+        return next(req)
+    }
+
+// ========================
+// CSRF Filter
+// ========================
+
+// CSRF returns a filter that validates CSRF tokens for state-changing requests.
+// The token is expected in the X-CSRF-Token header or _csrf form field.
+// Safe methods (GET, HEAD, OPTIONS) are skipped.
+func CSRF(secret string) Filter {
+    val signer = httpcore.NewHMACSigner(secret)
+    return (req Request, next Handler) => {
+        // Skip safe methods
+        val method = req.Method()
+        if method == GET() || method == HEAD() || method == OPTIONS() {
+            // Generate token and store in context for templates
+            val token = signer.GenerateToken()
+            req.CtxSet("csrf-token", token)
+            return next(req).Map((resp) =>
+                resp.SetCookie("_csrf", token))
+        }
+        // Validate token on state-changing methods
+        val token = req.Header("X-CSRF-Token").
+            OrElse(req.FormValue("_csrf")).
+            OrElse(req.QueryParam("_csrf"))
+        val t = token.GetOrElse("")
+        if t != "" && signer.ValidateToken(t) {
+            return next(req)
+        }
+        return FutureOf(Forbidden("Invalid CSRF token"))
+    }
+}
+
+// ========================
+// Redirect Filters
+// ========================
+
+// HTTPSRedirect returns a filter that redirects HTTP requests to HTTPS.
+func HTTPSRedirect() Filter =
+    (req Request, next Handler) => {
+        if req.Scheme() == "http" {
+            val host = req.Host()
+            val path = req.Path()
+            val q = req.RawQuery()
+            val base = s"https://$host$path"
+            val fullUrl = if (q != "") s"$base?$q" else base
+            return FutureOf(RedirectPermanent(fullUrl))
+        }
+        return next(req)
+    }
+
+// WWWRedirect returns a filter that redirects non-www to www.
+func WWWRedirect() Filter =
+    (req Request, next Handler) => {
+        if !strings.HasPrefix(req.Host(), "www.") {
+            val host = req.Host()
+            val path = req.Path()
+            val q = req.RawQuery()
+            val base = s"https://www.$host$path"
+            val fullUrl = if (q != "") s"$base?$q" else base
+            return FutureOf(RedirectPermanent(fullUrl))
+        }
+        return next(req)
+    }
+
+// NonWWWRedirect returns a filter that redirects www to non-www.
+func NonWWWRedirect() Filter =
+    (req Request, next Handler) => {
+        if strings.HasPrefix(req.Host(), "www.") {
+            val host = strings.TrimPrefix(req.Host(), "www.")
+            val path = req.Path()
+            val q = req.RawQuery()
+            val base = s"https://$host$path"
+            val fullUrl = if (q != "") s"$base?$q" else base
+            return FutureOf(RedirectPermanent(fullUrl))
+        }
+        return next(req)
+    }
+
+// TrailingSlash returns a filter that adds a trailing slash if missing.
+func TrailingSlash() Filter =
+    (req Request, next Handler) => {
+        val path = req.Path()
+        if path != "/" && !strings.HasSuffix(path, "/") {
+            val q = req.RawQuery()
+            val base = s"$path/"
+            val fullUrl = if (q != "") s"$base?$q" else base
+            return FutureOf(RedirectPermanent(fullUrl))
+        }
+        return next(req)
+    }
+
+// RemoveTrailingSlash returns a filter that removes trailing slashes.
+func RemoveTrailingSlash() Filter =
+    (req Request, next Handler) => {
+        val path = req.Path()
+        if path != "/" && strings.HasSuffix(path, "/") {
+            val q = req.RawQuery()
+            val base = strings.TrimRight(path, "/")
+            val fullUrl = if (q != "") s"$base?$q" else base
+            return FutureOf(RedirectPermanent(fullUrl))
+        }
+        return next(req)
+    }
+
+// ========================
+// Method Override Filter
+// ========================
+
+// MethodOverride returns a filter that overrides the HTTP method using
+// the X-HTTP-Method-Override header or _method form field.
+// This enables PUT/DELETE/PATCH from clients that only support GET/POST.
+func MethodOverride() Filter =
+    (req Request, next Handler) => {
+        // Only override POST requests
+        if req.Method() != POST() {
+            return next(req)
+        }
+        // Check header first, then form field
+        val override = req.Header("X-HTTP-Method-Override").
+            OrElse(req.FormValue("_method"))
+        val m = override.GetOrElse("")
+        if m != "" {
+            return next(req.WithMethod(strings.ToUpper(m)))
+        }
+        return next(req)
+    }
+
+// ========================
+// Body Dump Filter
+// ========================
+
+// BodyDump returns a filter that logs request and response bodies for debugging.
+// The handler receives (request body, response body) after the request is processed.
+func BodyDump(handler func(string, string)) Filter =
+    (req Request, next Handler) => {
+        val reqBody = req.Body()
+        return next(req).Map((resp) => {
+            handler(reqBody, resp.Body)
+            return resp
+        })
+    }
+
+// BodyDumpWithRequest returns a filter that logs request and response with full context.
+// The handler receives (Request, response body) after the request is processed.
+func BodyDumpWithRequest(handler func(Request, string)) Filter =
+    (req Request, next Handler) =>
+        next(req).Map((resp) => {
+            handler(req, resp.Body)
+            return resp
+        })
+
+// ========================
+// Decompress Filter
+// ========================
+
+// Decompress returns a filter that decompresses gzip-encoded request bodies.
+// Checks Content-Encoding: gzip header and decompresses the body before passing to handler.
+func Decompress() Filter =
+    (req Request, next Handler) => {
+        val encoding = req.Header("Content-Encoding").GetOrElse("")
+        if encoding == "gzip" {
+            val decompressed = httpcore.DecompressGzip(req.Body())
+            if decompressed != "" {
+                return next(req.WithBody(decompressed))
+            }
+        }
+        return next(req)
+    }
+
+// ========================
+// JWT Authentication Filter
+// ========================
+
+// JWTAuth returns a filter that validates JWT (HMAC-SHA256) Bearer tokens.
+// On success, stores claims in request context: "jwt-sub", "jwt-iss", etc.
+// secret is the HMAC signing key.
+func JWTAuth(secret string) Filter = JWTAuthWithConfig(secret, true)
+
+// JWTAuthWithConfig returns a JWT filter with configurable expiry checking.
+func JWTAuthWithConfig(secret string, checkExpiry bool) Filter =
+    (req Request, next Handler) => {
+        val header = req.Header("Authorization").GetOrElse("")
+        if header == "" || !strings.HasPrefix(header, "Bearer ") {
+            return FutureOf[Response](Unauthorized("Missing Bearer token"))
+        }
+        val token = strings.TrimPrefix(header, "Bearer ")
+        val result = httpcore.ParseAndValidateJWT(token, secret, checkExpiry)
+        if result.Valid {
+            val claims = result.Claims
+            val sub = claims.Get("sub")
+            if sub != "" { req.CtxSet("jwt-sub", sub) }
+            val iss = claims.Get("iss")
+            if iss != "" { req.CtxSet("jwt-iss", iss) }
+            val aud = claims.Get("aud")
+            if aud != "" { req.CtxSet("jwt-aud", aud) }
+            req.CtxSet("jwt-claims", claims)
+            return next(req)
+        }
+        val errMsg = result.Error
+        return FutureOf[Response](Unauthorized(s"Invalid token: $errMsg"))
+    }
+
+// ========================
+// Proxy Filter (Reverse Proxy)
+// ========================
+
+// Proxy returns a filter that forwards requests to a backend server.
+// The target is the base URL (e.g., "http://backend:3000").
+// This is a terminal filter — it replaces the handler's response with the proxy response.
+func Proxy(target string) Filter {
+    val config = httpcore.NewProxyConfig(target)
+    return proxyFilter(config)
+}
+
+// ProxyWithTimeout returns a proxy filter with a custom timeout.
+func ProxyWithTimeout(target string, timeout time.Duration) Filter {
+    val config = httpcore.NewProxyConfigWithTimeout(target, timeout)
+    return proxyFilter(config)
+}
+
+func proxyFilter(config *httpcore.ProxyConfig) Filter =
+    (req Request, next Handler) => FutureApply[Response](() => {
+        val headers = httpcore.ProxyRequestHeaders(req.bridge)
+        val result = httpcore.ProxyRequest(config, req.Method().Name(), req.Path(), req.RawQuery(), req.Body(), headers)
+        if result.Error != "" {
+            return BadGateway(result.Error)
+        }
+        // Forward response headers from backend using Go helper
+        val keys = httpcore.ProxyResultHeaderKeys(result)
+        return ArrayOf(keys...).FoldLeft(
+            NewResponse(StatusCustom(result.Status)).WithBody(result.Body),
+            (resp, k) => resp.WithHeader(k, httpcore.ProxyResultHeaderValue(result, k)))
+    })
+
+// ========================
+// Rewrite Filter
+// ========================
+
+// Rewrite returns a filter that rewrites URL paths based on rules.
+// Rules are (from, to) tuples using * as wildcard.
+// Example: Rewrite(ArrayOf(("/old/*", "/new/$1"), ("/api/*", "/v2/$1")))
+func Rewrite(rules Array[Tuple[string, string]]) Filter =
+    (req Request, next Handler) => {
+        val path = req.Path()
+        val matched = rules.Find((rule) => httpcore.MatchRewriteRule(path, rule.V1))
+        if matched.IsDefined() {
+            val rule = matched.Get()
+            val newPath = httpcore.ApplyRewriteRule(path, rule.V1, rule.V2)
+            req.CtxSet("_rewritten_path", newPath)
+            return next(req)
+        }
+        return next(req)
     }

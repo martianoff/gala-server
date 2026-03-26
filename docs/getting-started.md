@@ -108,3 +108,9 @@ server.GET("/users", handler)           // exact match
 server.GET("/users/{id}", handler)      // path parameter
 server.GET("/files/{path...}", handler) // wildcard (rest of path)
 ```
+
+## Next Steps
+
+- [API Reference](api-reference.md) — complete reference for all response constructors, request methods, and filters
+- [Filters](filters.md) — middleware system with three scopes
+- [Route Groups](groups.md) — organizing routes with shared prefixes and filters

@@ -1,0 +1,866 @@
+package server
+
+import (
+    . "martianoff/gala/test"
+    . "martianoff/gala/concurrent"
+    . "martianoff/gala/collection_immutable"
+    "github.com/martianoff/gala-server/httpcore"
+    "time"
+)
+
+// ============================================================================
+// Test Helpers
+// ============================================================================
+
+func mkReq(b *httpcore.TestRequestBuilder) Request = Request(bridge = b.Build())
+
+func req(method string, path string) *httpcore.TestRequestBuilder =
+    httpcore.NewTestRequestBuilder(method, path)
+
+// A simple handler that always returns Ok("ok")
+val okHandler Handler = (r Request) => FutureOf(Ok("ok"))
+
+// A handler that returns a JSON response
+val jsonHandler Handler = (r Request) => FutureOf(JsonResponse("{\"status\": \"ok\"}"))
+
+// A handler that panics (for testing Recovery)
+val panicHandler Handler = (r Request) => FutureApply(() => {
+    panic("test panic")
+    return Ok("never")
+})
+
+// ============================================================================
+// Logger Filter Tests
+// ============================================================================
+
+func TestLoggerDoesNotAlterResponse(t T) T {
+    val r = mkReq(req("GET", "/test"))
+    val resp = Logger()(r, okHandler).Get()
+    val t1 = Eq(t, resp.Code(), 200)
+    return Eq(t1, resp.Body, "ok")
+}
+
+func TestLoggerWithFormatDoesNotAlterResponse(t T) T {
+    val r = mkReq(req("GET", "/test"))
+    val format = (method string, path string, status int, duration _) => s"$method $path $status"
+    val resp = LoggerWithFormat(format)(r, okHandler).Get()
+    return Eq(t, resp.Code(), 200)
+}
+
+// ============================================================================
+// Recovery Filter Tests
+// ============================================================================
+
+func TestRecoveryReturns500OnPanic(t T) T {
+    val r = mkReq(req("GET", "/panic"))
+    val resp = Recovery()(r, panicHandler).Get()
+    val t1 = Eq(t, resp.Code(), 500)
+    return Contains(t1, resp.Body, "Internal Server Error")
+}
+
+func TestRecoveryPassesThroughOnSuccess(t T) T {
+    val r = mkReq(req("GET", "/ok"))
+    val resp = Recovery()(r, okHandler).Get()
+    return Eq(t, resp.Code(), 200)
+}
+
+// ============================================================================
+// CORS Filter Tests
+// ============================================================================
+
+func TestCorsAddsHeaders(t T) T {
+    val r = mkReq(req("GET", "/test"))
+    val resp = Cors()(r, okHandler).Get()
+    val t1 = Eq(t, resp.Code(), 200)
+    val t2 = Eq(t1, resp.HeaderValue("Access-Control-Allow-Origin"), "*")
+    return Contains(t2, resp.HeaderValue("Access-Control-Allow-Methods"), "GET")
+}
+
+func TestCorsOptionsPreflightReturns204(t T) T {
+    val r = mkReq(req("OPTIONS", "/test"))
+    val resp = Cors()(r, okHandler).Get()
+    val t1 = Eq(t, resp.Code(), 204)
+    val t2 = Eq(t1, resp.HeaderValue("Access-Control-Allow-Origin"), "*")
+    val t3 = Contains(t2, resp.HeaderValue("Access-Control-Allow-Methods"), "GET")
+    return Contains(t3, resp.HeaderValue("Access-Control-Max-Age"), "86400")
+}
+
+func TestCorsWithCustomOrigin(t T) T {
+    val r = mkReq(req("GET", "/test"))
+    val resp = CorsWithOrigins("https://example.com")(r, okHandler).Get()
+    return Eq(t, resp.HeaderValue("Access-Control-Allow-Origin"), "https://example.com")
+}
+
+func TestCorsWithConfigCustom(t T) T {
+    val r = mkReq(req("GET", "/test"))
+    val filter = CorsWithConfig("https://app.io", "GET, POST", "X-Custom", "3600")
+    val resp = filter(r, okHandler).Get()
+    val t1 = Eq(t, resp.HeaderValue("Access-Control-Allow-Origin"), "https://app.io")
+    return Contains(t1, resp.HeaderValue("Access-Control-Allow-Headers"), "X-Custom")
+}
+
+// ============================================================================
+// Auth Filter Tests
+// ============================================================================
+
+func TestAuthRejectsWithoutHeader(t T) T {
+    val r = mkReq(req("GET", "/secret"))
+    val resp = Auth()(r, okHandler).Get()
+    return Eq(t, resp.Code(), 401)
+}
+
+func TestAuthAllowsWithHeader(t T) T {
+    val r = mkReq(req("GET", "/secret").WithHeader("Authorization", "Bearer token"))
+    val resp = Auth()(r, okHandler).Get()
+    return Eq(t, resp.Code(), 200)
+}
+
+func TestAuthWithValidatorAcceptsValid(t T) T {
+    val validate = (header string) => header == "secret-key"
+    val r = mkReq(req("GET", "/").WithHeader("Authorization", "secret-key"))
+    val resp = AuthWithValidator(validate)(r, okHandler).Get()
+    return Eq(t, resp.Code(), 200)
+}
+
+func TestAuthWithValidatorRejectsInvalid(t T) T {
+    val validate = (header string) => header == "secret-key"
+    val r = mkReq(req("GET", "/").WithHeader("Authorization", "wrong"))
+    val resp = AuthWithValidator(validate)(r, okHandler).Get()
+    return Eq(t, resp.Code(), 401)
+}
+
+// ============================================================================
+// AuthBearer Filter Tests
+// ============================================================================
+
+func TestAuthBearerAcceptsValidToken(t T) T {
+    val validate = (token string) => token == "my-token"
+    val r = mkReq(req("GET", "/").WithHeader("Authorization", "Bearer my-token"))
+    val resp = AuthBearer(validate)(r, okHandler).Get()
+    return Eq(t, resp.Code(), 200)
+}
+
+func TestAuthBearerRejectsInvalidToken(t T) T {
+    val validate = (token string) => token == "my-token"
+    val r = mkReq(req("GET", "/").WithHeader("Authorization", "Bearer wrong"))
+    val resp = AuthBearer(validate)(r, okHandler).Get()
+    val t1 = Eq(t, resp.Code(), 401)
+    return Contains(t1, resp.Body, "Invalid token")
+}
+
+func TestAuthBearerRejectsMissingBearer(t T) T {
+    val validate = (token string) => true
+    val r = mkReq(req("GET", "/").WithHeader("Authorization", "Basic abc"))
+    val resp = AuthBearer(validate)(r, okHandler).Get()
+    val t1 = Eq(t, resp.Code(), 401)
+    return Contains(t1, resp.Body, "Missing Bearer")
+}
+
+func TestAuthBearerRejectsNoHeader(t T) T {
+    val validate = (token string) => true
+    val r = mkReq(req("GET", "/"))
+    val resp = AuthBearer(validate)(r, okHandler).Get()
+    return Eq(t, resp.Code(), 401)
+}
+
+// ============================================================================
+// BasicAuth Filter Tests
+// ============================================================================
+
+func TestBasicAuthAcceptsValidCredentials(t T) T {
+    val validate = (user string, pass string) => user == "admin" && pass == "secret"
+    val authHeader = httpcore.EncodeBasicAuth("admin", "secret")
+    val r = mkReq(req("GET", "/").WithHeader("Authorization", authHeader))
+    val resp = BasicAuth(validate)(r, okHandler).Get()
+    return Eq(t, resp.Code(), 200)
+}
+
+func TestBasicAuthRejectsInvalidCredentials(t T) T {
+    val validate = (user string, pass string) => user == "admin" && pass == "secret"
+    val authHeader = httpcore.EncodeBasicAuth("admin", "wrong")
+    val r = mkReq(req("GET", "/").WithHeader("Authorization", authHeader))
+    val resp = BasicAuth(validate)(r, okHandler).Get()
+    val t1 = Eq(t, resp.Code(), 401)
+    return Contains(t1, resp.HeaderValue("WWW-Authenticate"), "Basic")
+}
+
+func TestBasicAuthRejectsMissingHeader(t T) T {
+    val validate = (user string, pass string) => true
+    val r = mkReq(req("GET", "/"))
+    val resp = BasicAuth(validate)(r, okHandler).Get()
+    val t1 = Eq(t, resp.Code(), 401)
+    return Contains(t1, resp.HeaderValue("WWW-Authenticate"), "Basic")
+}
+
+func TestBasicAuthSetsUsernameInContext(t T) T {
+    val validate = (user string, pass string) => true
+    val authHeader = httpcore.EncodeBasicAuth("alice", "pass")
+    // Use a handler that reads context to verify username was set
+    val ctxHandler = (r Request) => FutureOf(
+        Ok(r.CtxGet("username").GetOrElse("none")))
+    val r = mkReq(req("GET", "/").WithHeader("Authorization", authHeader))
+    val resp = BasicAuth(validate)(r, ctxHandler).Get()
+    return Eq(t, resp.Body, "alice")
+}
+
+// ============================================================================
+// KeyAuth Filter Tests
+// ============================================================================
+
+func TestKeyAuthHeaderAcceptsValidKey(t T) T {
+    val validate = (key string) => key == "secret-api-key"
+    val r = mkReq(req("GET", "/").WithHeader("X-API-Key", "secret-api-key"))
+    val resp = KeyAuth("header:X-API-Key", validate)(r, okHandler).Get()
+    return Eq(t, resp.Code(), 200)
+}
+
+func TestKeyAuthHeaderRejectsInvalidKey(t T) T {
+    val validate = (key string) => key == "secret-api-key"
+    val r = mkReq(req("GET", "/").WithHeader("X-API-Key", "wrong"))
+    val resp = KeyAuth("header:X-API-Key", validate)(r, okHandler).Get()
+    return Eq(t, resp.Code(), 401)
+}
+
+func TestKeyAuthQueryAcceptsValidKey(t T) T {
+    val validate = (key string) => key == "my-key"
+    val r = mkReq(req("GET", "/api").WithRawQuery("api_key=my-key"))
+    val resp = KeyAuth("query:api_key", validate)(r, okHandler).Get()
+    return Eq(t, resp.Code(), 200)
+}
+
+func TestKeyAuthCookieAcceptsValidKey(t T) T {
+    val validate = (key string) => key == "cookie-key"
+    val r = mkReq(req("GET", "/").WithCookie("auth", "cookie-key"))
+    val resp = KeyAuth("cookie:auth", validate)(r, okHandler).Get()
+    return Eq(t, resp.Code(), 200)
+}
+
+func TestKeyAuthRejectsMissingKey(t T) T {
+    val validate = (key string) => true
+    val r = mkReq(req("GET", "/"))
+    val resp = KeyAuth("header:X-API-Key", validate)(r, okHandler).Get()
+    return Eq(t, resp.Code(), 401)
+}
+
+// ============================================================================
+// Secure Filter Tests
+// ============================================================================
+
+func TestSecureAddsDefaultHeaders(t T) T {
+    val r = mkReq(req("GET", "/"))
+    val resp = Secure()(r, okHandler).Get()
+    val t1 = Eq(t, resp.Code(), 200)
+    val t2 = Eq(t1, resp.HeaderValue("X-XSS-Protection"), "1; mode=block")
+    val t3 = Eq(t2, resp.HeaderValue("X-Content-Type-Options"), "nosniff")
+    return Eq(t3, resp.HeaderValue("X-Frame-Options"), "SAMEORIGIN")
+}
+
+func TestSecureWithConfigCustomHeaders(t T) T {
+    val r = mkReq(req("GET", "/"))
+    val filter = SecureWithConfig(
+        xssProtection = "0",
+        contentTypeNosniff = "nosniff",
+        xFrameOptions = "DENY",
+        hstsMaxAge = 31536000,
+        contentSecurityPolicy = "default-src 'self'",
+        referrerPolicy = "no-referrer",
+    )
+    val resp = filter(r, okHandler).Get()
+    val t1 = Eq(t, resp.HeaderValue("X-XSS-Protection"), "0")
+    val t2 = Eq(t1, resp.HeaderValue("X-Frame-Options"), "DENY")
+    val t3 = Contains(t2, resp.HeaderValue("Strict-Transport-Security"), "31536000")
+    val t4 = Eq(t3, resp.HeaderValue("Content-Security-Policy"), "default-src 'self'")
+    return Eq(t4, resp.HeaderValue("Referrer-Policy"), "no-referrer")
+}
+
+func TestSecureSkipsEmptyValues(t T) T {
+    val r = mkReq(req("GET", "/"))
+    val filter = SecureWithConfig(
+        xssProtection = "",
+        contentTypeNosniff = "",
+        xFrameOptions = "",
+        hstsMaxAge = 0,
+        contentSecurityPolicy = "",
+        referrerPolicy = "",
+    )
+    val resp = filter(r, okHandler).Get()
+    val t1 = Eq(t, resp.HeaderValue("X-XSS-Protection"), "")
+    val t2 = Eq(t1, resp.HeaderValue("X-Content-Type-Options"), "")
+    return Eq(t2, resp.HeaderValue("X-Frame-Options"), "")
+}
+
+// ============================================================================
+// BodyLimit Filter Tests
+// ============================================================================
+
+func TestBodyLimitAllowsSmallBody(t T) T {
+    val r = mkReq(req("POST", "/").WithBody("small"))
+    val resp = BodyLimit("1M")(r, okHandler).Get()
+    return Eq(t, resp.Code(), 200)
+}
+
+func TestBodyLimitRejectsLargeBody(t T) T {
+    // Create a body larger than 10 bytes
+    val largeBody = "12345678901"
+    val r = mkReq(req("POST", "/").WithBody(largeBody))
+    val resp = BodyLimitBytes(10)(r, okHandler).Get()
+    val t1 = Eq(t, resp.Code(), 413)
+    return Contains(t1, resp.Body, "Request Entity Too Large")
+}
+
+func TestBodyLimitBytesExactBoundary(t T) T {
+    val body = "1234567890"
+    val r = mkReq(req("POST", "/").WithBody(body))
+    // Exactly 10 bytes should pass (not exceed)
+    val resp = BodyLimitBytes(10)(r, okHandler).Get()
+    return Eq(t, resp.Code(), 200)
+}
+
+func TestBodyLimitParsesUnits(t T) T {
+    // 1K = 1024 bytes, body is small
+    val r = mkReq(req("POST", "/").WithBody("hello"))
+    val resp = BodyLimit("1K")(r, okHandler).Get()
+    return Eq(t, resp.Code(), 200)
+}
+
+// ============================================================================
+// RequestId Filter Tests
+// ============================================================================
+
+func TestRequestIdAddsHeader(t T) T {
+    val r = mkReq(req("GET", "/"))
+    val filter = RequestId()
+    val resp = filter(r, okHandler).Get()
+    val t1 = Eq(t, resp.Code(), 200)
+    val reqId = resp.HeaderValue("X-Request-ID")
+    return HasPrefix(t1, reqId, "req-")
+}
+
+func TestRequestIdIncrementsCounter(t T) T {
+    val filter = RequestId()
+    val r1 = mkReq(req("GET", "/1"))
+    val r2 = mkReq(req("GET", "/2"))
+    val resp1 = filter(r1, okHandler).Get()
+    val resp2 = filter(r2, okHandler).Get()
+    val id1 = resp1.HeaderValue("X-Request-ID")
+    val id2 = resp2.HeaderValue("X-Request-ID")
+    // IDs should be different
+    return IsTrue(t, id1 != id2)
+}
+
+func TestRequestIdSetsContext(t T) T {
+    val filter = RequestId()
+    val ctxHandler = (r Request) => FutureOf(
+        Ok(r.CtxGet("request-id").GetOrElse("none")))
+    val r = mkReq(req("GET", "/"))
+    val resp = filter(r, ctxHandler).Get()
+    return HasPrefix(t, resp.Body, "req-")
+}
+
+// ============================================================================
+// Gzip Filter Tests
+// ============================================================================
+
+func TestGzipAddsHeadersWhenAccepted(t T) T {
+    val r = mkReq(req("GET", "/").WithHeader("Accept-Encoding", "gzip, deflate"))
+    val resp = Gzip()(r, okHandler).Get()
+    val t1 = Eq(t, resp.HeaderValue("Content-Encoding"), "gzip")
+    return Eq(t1, resp.HeaderValue("Vary"), "Accept-Encoding")
+}
+
+func TestGzipSkipsWhenNotAccepted(t T) T {
+    val r = mkReq(req("GET", "/"))
+    val resp = Gzip()(r, okHandler).Get()
+    return Eq(t, resp.HeaderValue("Content-Encoding"), "")
+}
+
+func TestGzipSkipsEmptyBody(t T) T {
+    val emptyHandler = (r Request) => FutureOf(NoContent())
+    val r = mkReq(req("GET", "/").WithHeader("Accept-Encoding", "gzip"))
+    val resp = Gzip()(r, emptyHandler).Get()
+    return Eq(t, resp.HeaderValue("Content-Encoding"), "")
+}
+
+// ============================================================================
+// CSRF Filter Tests
+// ============================================================================
+
+func TestCSRFSkipsGET(t T) T {
+    val r = mkReq(req("GET", "/"))
+    val resp = CSRF("secret")(r, okHandler).Get()
+    return Eq(t, resp.Code(), 200)
+}
+
+func TestCSRFSkipsHEAD(t T) T {
+    val r = mkReq(req("HEAD", "/"))
+    val resp = CSRF("secret")(r, okHandler).Get()
+    return Eq(t, resp.Code(), 200)
+}
+
+func TestCSRFSkipsOPTIONS(t T) T {
+    val r = mkReq(req("OPTIONS", "/"))
+    val resp = CSRF("secret")(r, okHandler).Get()
+    return Eq(t, resp.Code(), 200)
+}
+
+func TestCSRFSetsCookieOnGET(t T) T {
+    val r = mkReq(req("GET", "/"))
+    val resp = CSRF("secret")(r, okHandler).Get()
+    // Should set a _csrf cookie
+    val hasCookie = resp.Cookies.Exists((c) => c.Name == "_csrf")
+    return IsTrue(t, hasCookie)
+}
+
+func TestCSRFRejectsPOSTWithoutToken(t T) T {
+    val r = mkReq(req("POST", "/submit"))
+    val resp = CSRF("secret")(r, okHandler).Get()
+    val t1 = Eq(t, resp.Code(), 403)
+    return Contains(t1, resp.Body, "CSRF")
+}
+
+func TestCSRFAcceptsPOSTWithValidToken(t T) T {
+    val filter = CSRF("test-secret")
+    // Step 1: GET to obtain token
+    val getReq = mkReq(req("GET", "/"))
+    val getResp = filter(getReq, okHandler).Get()
+    val csrfCookie = getResp.Cookies.Find((c) => c.Name == "_csrf")
+    val token = csrfCookie.Map((c) => c.Value).GetOrElse("")
+
+    // Step 2: POST with the token in X-CSRF-Token header
+    val postReq = mkReq(req("POST", "/submit").WithHeader("X-CSRF-Token", token))
+    val postResp = filter(postReq, okHandler).Get()
+    return Eq(t, postResp.Code(), 200)
+}
+
+// ============================================================================
+// HTTPSRedirect Filter Tests
+// ============================================================================
+
+func TestHTTPSRedirectOnHTTP(t T) T {
+    val r = mkReq(req("GET", "/page").WithScheme("http").WithHost("example.com"))
+    val resp = HTTPSRedirect()(r, okHandler).Get()
+    val t1 = Eq(t, resp.Code(), 301)
+    return Eq(t1, resp.HeaderValue("Location"), "https://example.com/page")
+}
+
+func TestHTTPSRedirectSkipsHTTPS(t T) T {
+    val r = mkReq(req("GET", "/page").WithScheme("https").WithHost("example.com"))
+    val resp = HTTPSRedirect()(r, okHandler).Get()
+    return Eq(t, resp.Code(), 200)
+}
+
+func TestHTTPSRedirectPreservesQuery(t T) T {
+    val r = mkReq(req("GET", "/page").
+        WithScheme("http").
+        WithHost("example.com").
+        WithRawQuery("q=test"))
+    val resp = HTTPSRedirect()(r, okHandler).Get()
+    return Eq(t, resp.HeaderValue("Location"), "https://example.com/page?q=test")
+}
+
+// ============================================================================
+// WWWRedirect Filter Tests
+// ============================================================================
+
+func TestWWWRedirectAddsWWW(t T) T {
+    val r = mkReq(req("GET", "/page").WithHost("example.com"))
+    val resp = WWWRedirect()(r, okHandler).Get()
+    val t1 = Eq(t, resp.Code(), 301)
+    return Contains(t1, resp.HeaderValue("Location"), "www.example.com")
+}
+
+func TestWWWRedirectSkipsWWW(t T) T {
+    val r = mkReq(req("GET", "/page").WithHost("www.example.com"))
+    val resp = WWWRedirect()(r, okHandler).Get()
+    return Eq(t, resp.Code(), 200)
+}
+
+// ============================================================================
+// NonWWWRedirect Filter Tests
+// ============================================================================
+
+func TestNonWWWRedirectRemovesWWW(t T) T {
+    val r = mkReq(req("GET", "/page").WithHost("www.example.com"))
+    val resp = NonWWWRedirect()(r, okHandler).Get()
+    val t1 = Eq(t, resp.Code(), 301)
+    val t2 = Contains(t1, resp.HeaderValue("Location"), "example.com")
+    // Should NOT have www.
+    return NotContains(t2, resp.HeaderValue("Location"), "www.")
+}
+
+func TestNonWWWRedirectSkipsNonWWW(t T) T {
+    val r = mkReq(req("GET", "/page").WithHost("example.com"))
+    val resp = NonWWWRedirect()(r, okHandler).Get()
+    return Eq(t, resp.Code(), 200)
+}
+
+// ============================================================================
+// TrailingSlash Filter Tests
+// ============================================================================
+
+func TestTrailingSlashAddsSlash(t T) T {
+    val r = mkReq(req("GET", "/path"))
+    val resp = TrailingSlash()(r, okHandler).Get()
+    val t1 = Eq(t, resp.Code(), 301)
+    return Eq(t1, resp.HeaderValue("Location"), "/path/")
+}
+
+func TestTrailingSlashSkipsRoot(t T) T {
+    val r = mkReq(req("GET", "/"))
+    val resp = TrailingSlash()(r, okHandler).Get()
+    return Eq(t, resp.Code(), 200)
+}
+
+func TestTrailingSlashSkipsExisting(t T) T {
+    val r = mkReq(req("GET", "/path/"))
+    val resp = TrailingSlash()(r, okHandler).Get()
+    return Eq(t, resp.Code(), 200)
+}
+
+func TestTrailingSlashPreservesQuery(t T) T {
+    val r = mkReq(req("GET", "/path").WithRawQuery("q=test"))
+    val resp = TrailingSlash()(r, okHandler).Get()
+    return Eq(t, resp.HeaderValue("Location"), "/path/?q=test")
+}
+
+// ============================================================================
+// RemoveTrailingSlash Filter Tests
+// ============================================================================
+
+func TestRemoveTrailingSlashRemoves(t T) T {
+    val r = mkReq(req("GET", "/path/"))
+    val resp = RemoveTrailingSlash()(r, okHandler).Get()
+    val t1 = Eq(t, resp.Code(), 301)
+    return Eq(t1, resp.HeaderValue("Location"), "/path")
+}
+
+func TestRemoveTrailingSlashSkipsRoot(t T) T {
+    val r = mkReq(req("GET", "/"))
+    val resp = RemoveTrailingSlash()(r, okHandler).Get()
+    return Eq(t, resp.Code(), 200)
+}
+
+func TestRemoveTrailingSlashSkipsNoSlash(t T) T {
+    val r = mkReq(req("GET", "/path"))
+    val resp = RemoveTrailingSlash()(r, okHandler).Get()
+    return Eq(t, resp.Code(), 200)
+}
+
+// ============================================================================
+// Rewrite Filter Tests
+// ============================================================================
+
+func TestRewriteMatchingRule(t T) T {
+    val rules = ArrayOf(("/old/*", "/new/$1"))
+    val ctxHandler = (r Request) => FutureOf(
+        Ok(r.CtxGet("_rewritten_path").GetOrElse("none")))
+    val r = mkReq(req("GET", "/old/foo/bar"))
+    val resp = Rewrite(rules)(r, ctxHandler).Get()
+    return Eq(t, resp.Body, "/new/foo/bar")
+}
+
+func TestRewriteNoMatch(t T) T {
+    val rules = ArrayOf(("/old/*", "/new/$1"))
+    val r = mkReq(req("GET", "/other/path"))
+    val resp = Rewrite(rules)(r, okHandler).Get()
+    return Eq(t, resp.Code(), 200)
+}
+
+func TestRewriteMultipleRules(t T) T {
+    val rules = ArrayOf(
+        ("/api/*", "/v2/$1"),
+        ("/old/*", "/new/$1"),
+    )
+    val ctxHandler = (r Request) => FutureOf(
+        Ok(r.CtxGet("_rewritten_path").GetOrElse("none")))
+    val r = mkReq(req("GET", "/api/users"))
+    val resp = Rewrite(rules)(r, ctxHandler).Get()
+    return Eq(t, resp.Body, "/v2/users")
+}
+
+// ============================================================================
+// RateLimit Filter Tests
+// ============================================================================
+
+func TestRateLimitAllowsRequests(t T) T {
+    val filter = RateLimit(10.0, 10.0)
+    val r = mkReq(req("GET", "/"))
+    val resp = filter(r, okHandler).Get()
+    return Eq(t, resp.Code(), 200)
+}
+
+func TestRateLimitRejectsWhenExhausted(t T) T {
+    // Very small bucket: 1 token, no refill
+    val filter = RateLimit(1.0, 0.0)
+    val r1 = mkReq(req("GET", "/1"))
+    val r2 = mkReq(req("GET", "/2"))
+    // First request uses the only token
+    val resp1 = filter(r1, okHandler).Get()
+    // Second request should be rate limited
+    val resp2 = filter(r2, okHandler).Get()
+    val t1 = Eq(t, resp1.Code(), 200)
+    val t2 = Eq(t1, resp2.Code(), 429)
+    return Contains(t2, resp2.HeaderValue("Retry-After"), "1")
+}
+
+func TestRateLimitPerIPAllowsDifferentIPs(t T) T {
+    val filter = RateLimitPerIP(1.0, 0.0)
+    val r1 = mkReq(req("GET", "/").WithRemoteAddr("10.0.0.1:1234"))
+    val r2 = mkReq(req("GET", "/").WithRemoteAddr("10.0.0.2:1234"))
+    val resp1 = filter(r1, okHandler).Get()
+    val resp2 = filter(r2, okHandler).Get()
+    // Different IPs should each get their own bucket
+    val t1 = Eq(t, resp1.Code(), 200)
+    return Eq(t1, resp2.Code(), 200)
+}
+
+// ============================================================================
+// Composed Filter Tests
+// ============================================================================
+
+func TestMultipleFiltersCompose(t T) T {
+    // Apply Logger + Recovery + Cors to a handler
+    val r = mkReq(req("GET", "/"))
+    val handler = okHandler
+    // Manual filter composition: Logger wraps Recovery wraps Cors wraps handler
+    val withCors = (r2 Request) => Cors()(r2, handler)
+    val withRecovery = (r2 Request) => Recovery()(r2, withCors)
+    val resp = Logger()(r, withRecovery).Get()
+    val t1 = Eq(t, resp.Code(), 200)
+    return Eq(t1, resp.HeaderValue("Access-Control-Allow-Origin"), "*")
+}
+
+func TestFilterPreservesResponseBody(t T) T {
+    val customHandler = (r Request) => FutureOf(Ok("custom body"))
+    val r = mkReq(req("GET", "/"))
+    val resp = Logger()(r, customHandler).Get()
+    return Eq(t, resp.Body, "custom body")
+}
+
+// ============================================================================
+// MethodOverride Filter Tests
+// ============================================================================
+
+func TestMethodOverrideFromHeader(t T) T {
+    val methodHandler = (r Request) => FutureOf(Ok(r.Method().Name()))
+    val r = mkReq(req("POST", "/resource").
+        WithHeader("X-HTTP-Method-Override", "PUT"))
+    val resp = MethodOverride()(r, methodHandler).Get()
+    return Eq(t, resp.Body, "PUT")
+}
+
+func TestMethodOverrideFromFormField(t T) T {
+    val methodHandler = (r Request) => FutureOf(Ok(r.Method().Name()))
+    val r = mkReq(req("POST", "/resource").
+        WithFormParam("_method", "DELETE"))
+    val resp = MethodOverride()(r, methodHandler).Get()
+    return Eq(t, resp.Body, "DELETE")
+}
+
+func TestMethodOverrideSkipsGET(t T) T {
+    val methodHandler = (r Request) => FutureOf(Ok(r.Method().Name()))
+    val r = mkReq(req("GET", "/resource").
+        WithHeader("X-HTTP-Method-Override", "PUT"))
+    val resp = MethodOverride()(r, methodHandler).Get()
+    // GET should not be overridden
+    return Eq(t, resp.Body, "GET")
+}
+
+func TestMethodOverridePassesThroughWithoutOverride(t T) T {
+    val r = mkReq(req("POST", "/resource"))
+    val resp = MethodOverride()(r, okHandler).Get()
+    return Eq(t, resp.Code(), 200)
+}
+
+// ============================================================================
+// BodyDump Filter Tests
+// ============================================================================
+
+func TestBodyDumpCapturesBodies(t T) T {
+    var capturedReqBody = ""
+    var capturedRespBody = ""
+    val handler = (reqBody string, respBody string) => {
+        capturedReqBody = reqBody
+        capturedRespBody = respBody
+    }
+    val customHandler = (r Request) => FutureOf(Ok("response body"))
+    val r = mkReq(req("POST", "/").WithBody("request body"))
+    val resp = BodyDump(handler)(r, customHandler).Get()
+
+    val t1 = Eq(t, resp.Code(), 200)
+    val t2 = Eq(t1, capturedReqBody, "request body")
+    return Eq(t2, capturedRespBody, "response body")
+}
+
+func TestBodyDumpDoesNotAlterResponse(t T) T {
+    val handler = (reqBody string, respBody string) => {}
+    val r = mkReq(req("GET", "/"))
+    val resp = BodyDump(handler)(r, okHandler).Get()
+    val t1 = Eq(t, resp.Code(), 200)
+    return Eq(t1, resp.Body, "ok")
+}
+
+// ============================================================================
+// MethodOverride + BodyDump + Decompress Creation Tests
+// ============================================================================
+
+func TestMethodOverrideCreation(t T) T = IsTrue(t, MethodOverride() != nil)
+
+func TestBodyDumpCreation(t T) T {
+    val handler = (reqBody string, respBody string) => {}
+    return IsTrue(t, BodyDump(handler) != nil)
+}
+
+func TestDecompressCreation(t T) T = IsTrue(t, Decompress() != nil)
+
+// ============================================================================
+// HTTPError Filter Integration Tests
+// ============================================================================
+
+func TestHTTPErrorInFilter(t T) T {
+    val err = NewHTTPError(StatusNotFound(), "resource not found")
+    // A handler that returns HTTPError response
+    val errorHandler = (r Request) => FutureOf(err.ToJsonResponse())
+    val r = mkReq(req("GET", "/missing"))
+    val resp = Logger()(r, errorHandler).Get()
+    val t1 = Eq(t, resp.Code(), 404)
+    return Eq(t1, resp.HeaderValue("Content-Type"), "application/json")
+}
+
+// ============================================================================
+// JWT Auth Filter Tests
+// ============================================================================
+
+func TestJWTAuthRejectsMissingToken(t T) T {
+    val r = mkReq(req("GET", "/api"))
+    val resp = JWTAuth("my-secret")(r, okHandler).Get()
+    val t1 = Eq(t, resp.Code(), 401)
+    return Contains(t1, resp.Body, "Missing Bearer token")
+}
+
+func TestJWTAuthRejectsNonBearerHeader(t T) T {
+    val r = mkReq(req("GET", "/api").WithHeader("Authorization", "Basic abc"))
+    val resp = JWTAuth("my-secret")(r, okHandler).Get()
+    val t1 = Eq(t, resp.Code(), 401)
+    return Contains(t1, resp.Body, "Missing Bearer token")
+}
+
+func TestJWTAuthAcceptsValidToken(t T) T {
+    val secret = "test-jwt-secret"
+    val claims = "{\"sub\":\"user123\",\"iss\":\"test-app\",\"aud\":\"api\"}"
+    val token = httpcore.CreateJWT(claims, secret)
+    val r = mkReq(req("GET", "/api").WithHeader("Authorization", s"Bearer $token"))
+    val resp = JWTAuth(secret)(r, okHandler).Get()
+    return Eq(t, resp.Code(), 200)
+}
+
+func TestJWTAuthRejectsInvalidSignature(t T) T {
+    val claims = "{\"sub\":\"user123\"}"
+    val token = httpcore.CreateJWT(claims, "correct-secret")
+    val r = mkReq(req("GET", "/api").WithHeader("Authorization", s"Bearer $token"))
+    val resp = JWTAuth("wrong-secret")(r, okHandler).Get()
+    val t1 = Eq(t, resp.Code(), 401)
+    return Contains(t1, resp.Body, "invalid signature")
+}
+
+func TestJWTAuthRejectsMalformedToken(t T) T {
+    val r = mkReq(req("GET", "/api").WithHeader("Authorization", "Bearer not-a-jwt"))
+    val resp = JWTAuth("secret")(r, okHandler).Get()
+    val t1 = Eq(t, resp.Code(), 401)
+    return Contains(t1, resp.Body, "malformed token")
+}
+
+func TestJWTAuthStoresClaimsInContext(t T) T {
+    val secret = "ctx-test-secret"
+    val claims = "{\"sub\":\"alice\",\"iss\":\"my-app\"}"
+    val token = httpcore.CreateJWT(claims, secret)
+    val ctxHandler = (r Request) => {
+        val sub = r.CtxGet("jwt-sub").GetOrElse("none")
+        val iss = r.CtxGet("jwt-iss").GetOrElse("none")
+        return FutureOf(Ok(s"$sub:$iss"))
+    }
+    val r = mkReq(req("GET", "/api").WithHeader("Authorization", s"Bearer $token"))
+    val resp = JWTAuth(secret)(r, ctxHandler).Get()
+    return Eq(t, resp.Body, "alice:my-app")
+}
+
+func TestJWTAuthRejectsExpiredToken(t T) T {
+    val secret = "expiry-test"
+    // Token with exp in the past (epoch 0)
+    val claims = "{\"sub\":\"user\",\"exp\":0}"
+    val token = httpcore.CreateJWT(claims, secret)
+    val r = mkReq(req("GET", "/api").WithHeader("Authorization", s"Bearer $token"))
+    val resp = JWTAuth(secret)(r, okHandler).Get()
+    val t1 = Eq(t, resp.Code(), 401)
+    return Contains(t1, resp.Body, "expired")
+}
+
+func TestJWTAuthWithConfigSkipsExpiryCheck(t T) T {
+    val secret = "no-expiry-check"
+    // Token with exp in the past, but expiry checking disabled
+    val claims = "{\"sub\":\"user\",\"exp\":0}"
+    val token = httpcore.CreateJWT(claims, secret)
+    val r = mkReq(req("GET", "/api").WithHeader("Authorization", s"Bearer $token"))
+    val resp = JWTAuthWithConfig(secret, false)(r, okHandler).Get()
+    return Eq(t, resp.Code(), 200)
+}
+
+func TestJWTAuthCreation(t T) T = IsTrue(t, JWTAuth("secret") != nil)
+
+func TestJWTAuthWithConfigCreation(t T) T = IsTrue(t, JWTAuthWithConfig("secret", true) != nil)
+
+// ============================================================================
+// Proxy Filter Tests
+// ============================================================================
+
+func TestProxyCreation(t T) T = IsTrue(t, Proxy("http://localhost:3000") != nil)
+
+func TestProxyWithTimeoutCreation(t T) T {
+    val filter = ProxyWithTimeout("http://localhost:3000", 5 * time.Second)
+    return IsTrue(t, filter != nil)
+}
+
+// ============================================================================
+// BadGateway Response Tests
+// ============================================================================
+
+func TestBadGatewayResponse(t T) T {
+    val resp = BadGateway("upstream error")
+    val t1 = Eq(t, resp.Code(), 502)
+    return Eq(t1, resp.Body, "upstream error")
+}
+
+// ============================================================================
+// JWT Go Helper Tests (via httpcore)
+// ============================================================================
+
+func TestCreateAndParseJWT(t T) T {
+    val secret = "roundtrip-test"
+    val claims = "{\"sub\":\"test-user\",\"role\":\"admin\"}"
+    val token = httpcore.CreateJWT(claims, secret)
+    val result = httpcore.ParseAndValidateJWT(token, secret, false)
+    val t1 = IsTrue(t, result.Valid)
+    val t2 = Eq(t1, result.Claims.Get("sub"), "test-user")
+    return Eq(t2, result.Claims.Get("role"), "admin")
+}
+
+func TestJWTRejectsWrongSecret(t T) T {
+    val token = httpcore.CreateJWT("{\"sub\":\"user\"}", "secret1")
+    val result = httpcore.ParseAndValidateJWT(token, "secret2", false)
+    val t1 = IsFalse(t, result.Valid)
+    return Eq(t1, result.Error, "invalid signature")
+}
+
+func TestJWTRejectsMalformed(t T) T {
+    val result = httpcore.ParseAndValidateJWT("not.a.jwt.token", "secret", false)
+    return IsFalse(t, result.Valid)
+}
+
+func TestJWTNumericClaims(t T) T {
+    val secret = "numeric-test"
+    val claims = "{\"sub\":\"user\",\"exp\":1999999999,\"iat\":1000000000}"
+    val token = httpcore.CreateJWT(claims, secret)
+    val result = httpcore.ParseAndValidateJWT(token, secret, false)
+    val t1 = IsTrue(t, result.Valid)
+    return Eq(t1, result.Claims.Get("exp"), "1999999999")
+}

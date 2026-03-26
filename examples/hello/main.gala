@@ -1,35 +1,119 @@
 package main
 
-import . "martianoff/gala-server"
+import (
+    . "martianoff/gala-server"
+    . "martianoff/gala/collection_immutable"
+    "time"
+)
 
 func main() {
     // API group — Auth filter applies to all routes in this group
     val api = NewGroup().
+        GET("/users", (req) => {
+            val page = req.QueryParamDefault("page", "1")
+            return JsonResponse(s"{\"users\": [], \"page\": $page}")
+        }).
         GET("/users/{id}", (req) => {
             val id = req.Param("id").GetOrElse("0")
             return JsonResponse(s"{\"id\": \"$id\"}")
         }).
+        POST("/users", (req) =>
+            req.Body() match {
+                case "" => NewHTTPError(StatusBadRequest(), "body required").ToJsonResponse()
+                case body => Created(body)
+            }).
         POST("/echo", (req) => {
             val body = req.Body()
             return JsonResponse(s"{\"echo\": \"$body\"}")
         }).
         WithFilter(Auth())
 
-    // Build the server with three filter levels:
-    //   Per-route:  Auth() on /secret only
+    // Admin group with bearer token and security headers
+    val admin = NewGroup().
+        GET("/stats", (req) => {
+            val user = req.CtxGet("user").GetOrElse("anonymous")
+            return JsonResponse(s"{\"admin\": \"$user\", \"uptime\": \"24h\"}")
+        }).
+        WithFilter(AuthBearer((token) => token == "admin-secret")).
+        WithFilter(Secure())
+
+    // Build the server with full framework features:
+    //
+    //   Per-route:  Auth() on /secret only, BasicAuth on /basic
     //   Group:      Auth() on /api/v1/* (from api group)
-    //   Global:     Logger, Recovery, Cors on ALL routes
+    //   Group:      AuthBearer() + Secure() on /admin/* (from admin group)
+    //   Global:     Logger, Recovery, Cors, RateLimit, RequestId on ALL routes
+    //
+    //   Named routes: "home" -> /, "health" -> /health, "search" -> /search
+    //   Middleware: MethodOverride (override POST to PUT/DELETE via header)
+    //   Response types: JSON, HTML, Text, JSONP, Stream
+    //   HTTPError: Structured error responses
     val server = NewServer().
-        WithName("Hello API").
+        WithName("GALA Full API").
         WithPort(8080).
-        GET("/", (req) => Ok("Hello, GALA!")).
-        GET("/health", (req) => JsonResponse("{\"status\": \"ok\"}")).
+        WithShutdownTimeout(15 * time.Second).
+        WithDebug(true).
+        WithErrorHandler((err) => NewHTTPError(StatusInternalError(), s"$err").ToJsonResponse()).
+        WithNotFound((req) => NewHTTPError(StatusNotFound(), s"${req.Method().Name()} ${req.Path()} not found").ToJsonResponse()).
+        // Named routes
+        GET("/", (req) => Ok("Hello, GALA!")).Named("home").
+        GET("/health", (req) => JsonResponse("{\"status\": \"ok\"}")).Named("health").
+        // Search with query params
+        GET("/search", (req) => {
+            val q = req.QueryParam("q").GetOrElse("*")
+            val page = req.QueryParamInt("page").GetOrElse(1)
+            return JsonResponse(s"{\"query\": \"$q\", \"page\": $page}")
+        }).Named("search").
+        // JSONP endpoint
+        GET("/jsonp", (req) => {
+            val callback = req.QueryParamDefault("callback", "jsonpCallback")
+            return JSONP(callback, "{\"data\": \"hello\"}")
+        }).
+        // Cookie demo
+        GET("/cookie-demo", (req) => {
+            val visits = req.Cookie("visits").GetOrElse("0")
+            return Ok(s"Visits: $visits").
+                SetCookie("visits", "incremented").
+                SetSecureCookie("session", "abc123", 3600)
+        }).
+        // Server-Sent Events (stream)
+        GET("/events", (req) =>
+            Stream(StatusOk(), "text/event-stream", "data: {\"type\": \"ping\"}\n\n")).
+        // Content type variants
+        GET("/text", (req) => Text("plain text")).
+        GET("/html", (req) => Html("<h1>Hello GALA</h1>")).
+        GET("/xml", (req) => Xml("<server><name>GALA</name></server>")).
+        // Protected routes
         GET("/secret", (req) => Ok("secret data"), Auth()).
+        GET("/basic", (req) => {
+            val user = req.CtxGet("username").GetOrElse("anonymous")
+            return Ok(s"Hello, $user")
+        }, BasicAuth((u, p) => u == "admin" && p == "password")).
+        // API key auth
+        GET("/api-key", (req) => Ok("authenticated"),
+            KeyAuth("header:X-API-Key", (key) => key == "my-secret-key")).
+        // Static files
+        Static("/public/", "./static").
+        // Groups
         Group("/api/v1", api).
+        Group("/admin", admin).
+        // URL rewriting
+        WithFilter(Rewrite(ArrayOf(("/v1/*", "/api/v1/$1")))).
+        // Global middleware stack
         WithFilter(Logger()).
         WithFilter(Recovery()).
-        WithFilter(Cors())
+        WithFilter(Cors()).
+        WithFilter(RateLimit(1000.0, 100.0)).
+        WithFilter(RequestId()).
+        WithFilter(MethodOverride()).
+        WithFilter(BodyLimit("10M"))
 
+    // URL generation from named routes
+    Println(s"Home URL: ${server.URL("home").GetOrElse("???")}")
+    Println(s"Search URL: ${server.URL("search").GetOrElse("???")}")
     Println(s"Routes registered: ${server.RouteCount()}")
-    server.Listen()
+    Println(s"Filters registered: ${server.FilterCount()}")
+
+    // Start with graceful shutdown (responds to SIGINT/SIGTERM)
+    server.ListenGraceful()
 }

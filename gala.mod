@@ -1,3 +1,3 @@
 module github.com/martianoff/gala-server
 
-gala 0.17.1
+gala dev

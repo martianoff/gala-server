@@ -2,16 +2,22 @@ package server
 
 import (
     . "martianoff/gala/collection_immutable"
+    . "martianoff/gala/json"
     "github.com/martianoff/gala-server/httpcore"
 )
 
 // Response is a GALA-native immutable HTTP response.
 // Each builder method returns a new Response (no mutation).
 type Response struct {
-    Status  StatusCode
-    Body    string
-    Headers Array[Tuple[string, string]]
+    Status    StatusCode
+    Body      string
+    BodyBytes Option[Array[byte]]
+    Headers   Array[Tuple[string, string]]
+    Cookies   Array[Cookie]
 }
+
+// Cookie represents an HTTP Set-Cookie value.
+struct Cookie(Name string, Value string, Path string, Domain string, MaxAge int, Secure bool, HttpOnly bool, SameSite string)
 
 // Code returns the numeric HTTP status code.
 func (r Response) Code() int = r.Status.Code()
@@ -20,26 +26,52 @@ func (r Response) Code() int = r.Status.Code()
 func NewResponse(status StatusCode) Response = Response(
     Status = status,
     Body = "",
+    BodyBytes = None[Array[byte]](),
     Headers = EmptyArray[Tuple[string, string]](),
+    Cookies = EmptyArray[Cookie](),
 )
+
+// --- Builder Methods ---
 
 // WithHeader returns a new Response with an additional header.
 func (r Response) WithHeader(key string, value string) Response =
-    Response(Status = r.Status, Body = r.Body, Headers = r.Headers.Append((key, value)))
+    Response(Status = r.Status, Body = r.Body, BodyBytes = r.BodyBytes, Headers = r.Headers.Append((key, value)), Cookies = r.Cookies)
 
-// WithBody returns a new Response with the given body.
+// WithBody returns a new Response with the given string body.
 func (r Response) WithBody(body string) Response =
-    Response(Status = r.Status, Body = body, Headers = r.Headers)
+    Response(Status = r.Status, Body = body, BodyBytes = None[Array[byte]](), Headers = r.Headers, Cookies = r.Cookies)
+
+// WithBodyBytes returns a new Response with the given binary body.
+func (r Response) WithBodyBytes(body []byte) Response =
+    Response(Status = r.Status, Body = "", BodyBytes = Some(ArrayOf(body...)), Headers = r.Headers, Cookies = r.Cookies)
 
 // WithStatus returns a new Response with the given status code.
 func (r Response) WithStatus(status StatusCode) Response =
-    Response(Status = status, Body = r.Body, Headers = r.Headers)
+    Response(Status = status, Body = r.Body, BodyBytes = r.BodyBytes, Headers = r.Headers, Cookies = r.Cookies)
+
+// WithCookie returns a new Response with an additional cookie.
+func (r Response) WithCookie(cookie Cookie) Response =
+    Response(Status = r.Status, Body = r.Body, BodyBytes = r.BodyBytes, Headers = r.Headers, Cookies = r.Cookies.Append(cookie))
+
+// SetCookie is a convenience for adding a simple name=value cookie.
+func (r Response) SetCookie(name string, value string) Response =
+    r.WithCookie(Cookie(name, value, "/", "", 0, false, false, ""))
+
+// SetSecureCookie adds a secure, httponly cookie with the given max age.
+func (r Response) SetSecureCookie(name string, value string, maxAge int) Response =
+    r.WithCookie(Cookie(name, value, "/", "", maxAge, true, true, "Lax"))
+
+// DeleteCookie returns a Response that instructs the client to delete the named cookie.
+func (r Response) DeleteCookie(name string) Response =
+    r.WithCookie(Cookie(name, "", "/", "", -1, false, false, ""))
 
 // HeaderValue returns a response header value by key, or empty string if not found.
 func (r Response) HeaderValue(key string) string =
     r.Headers.Find((pair) => pair.V1 == key).Map((p) => p.V2).GetOrElse("")
 
-// --- Status Code Responses ---
+// ============================================================================
+// Status Code Response Constructors
+// ============================================================================
 
 func Ok(body string) Response = NewResponse(StatusOk()).WithBody(body)
 
@@ -61,25 +93,170 @@ func MethodNotAllowed() Response = NewResponse(StatusMethodNotAllowed())
 
 func Conflict(body string) Response = NewResponse(StatusConflict()).WithBody(body)
 
+func UnprocessableEntity(body string) Response = NewResponse(StatusCustom(422)).WithBody(body)
+
 func InternalError(body string) Response = NewResponse(StatusInternalError()).WithBody(body)
 
 func ServiceUnavailable(body string) Response = NewResponse(StatusServiceUnavailable()).WithBody(body)
 
-// --- Content-Type Helpers ---
+func TooManyRequests(body string) Response = NewResponse(StatusCustom(429)).WithBody(body)
 
+func RequestTimeout() Response = NewResponse(StatusCustom(408))
+
+func BadGateway(body string) Response = NewResponse(StatusCustom(502)).WithBody(body)
+
+// ============================================================================
+// Content-Type Response Constructors
+// ============================================================================
+
+// JsonResponse returns a 200 response with application/json Content-Type.
 func JsonResponse(body string) Response =
     Ok(body).WithHeader("Content-Type", "application/json")
 
+// Text returns a 200 response with text/plain Content-Type.
 func Text(body string) Response =
     Ok(body).WithHeader("Content-Type", "text/plain")
 
+// Html returns a 200 response with text/html Content-Type.
 func Html(body string) Response =
     Ok(body).WithHeader("Content-Type", "text/html")
 
+// Xml returns a 200 response with application/xml Content-Type.
+func Xml(body string) Response =
+    Ok(body).WithHeader("Content-Type", "application/xml")
+
+// JsonWithStatus returns a JSON response with a custom status code.
 func JsonWithStatus(status StatusCode, body string) Response =
     NewResponse(status).WithBody(body).WithHeader("Content-Type", "application/json")
 
-// --- Redirect Helpers ---
+// Blob returns a binary response with the given content type.
+func Blob(status StatusCode, contentType string, data []byte) Response =
+    NewResponse(status).WithBodyBytes(data).WithHeader("Content-Type", contentType)
+
+// ============================================================================
+// JSON Serialization (zero-reflection, via GALA codec)
+// ============================================================================
+
+// JsonFrom encodes a struct to a 200 JSON response using the given codec.
+func JsonFrom[T any](value T, codec JsonEncoder[T]) Response =
+    codec.Encode(value) match {
+        case Success(json) => JsonResponse(json)
+        case Failure(err) => InternalError(s"JSON encode error: $err")
+    }
+
+// JsonFromWithStatus encodes a struct to a JSON response with a specific status code.
+func JsonFromWithStatus[T any](status StatusCode, value T, codec JsonEncoder[T]) Response =
+    codec.Encode(value) match {
+        case Success(json) => JsonWithStatus(status, json)
+        case Failure(err) => InternalError(s"JSON encode error: $err")
+    }
+
+// JsonPretty encodes a struct to a pretty-printed JSON response.
+func JsonPretty[T any](value T, codec JsonEncoder[T]) Response =
+    codec.EncodePretty(value) match {
+        case Success(json) => JsonResponse(json)
+        case Failure(err) => InternalError(s"JSON encode error: $err")
+    }
+
+// ============================================================================
+// File and Attachment Responses
+// ============================================================================
+
+// File serves a file from the filesystem. Equivalent to Echo's c.File().
+func File(path string) Response {
+    val data, contentType, err = httpcore.ReadFile(path)
+    if err != nil {
+        return NotFound(s"File not found: $path")
+    }
+    return Blob(StatusOk(), contentType, data)
+}
+
+// Attachment serves a file as a download with the given filename.
+// Sets Content-Disposition: attachment to force browser download.
+func Attachment(path string, filename string) Response {
+    val data, contentType, err = httpcore.ReadFile(path)
+    if err != nil {
+        return NotFound(s"File not found: $path")
+    }
+    return Blob(StatusOk(), contentType, data).
+        WithHeader("Content-Disposition", s"attachment; filename=\"$filename\"")
+}
+
+// Inline serves a file inline (displayed in browser, not downloaded).
+func Inline(path string, filename string) Response {
+    val data, contentType, err = httpcore.ReadFile(path)
+    if err != nil {
+        return NotFound(s"File not found: $path")
+    }
+    return Blob(StatusOk(), contentType, data).
+        WithHeader("Content-Disposition", s"inline; filename=\"$filename\"")
+}
+
+// ============================================================================
+// JSONP Response
+// ============================================================================
+
+// JSONP returns a 200 response with JSONP (JSON with Padding) content.
+// Wraps the JSON body in a callback function call.
+func JSONP(callback string, body string) Response =
+    Ok(s"/**/ typeof $callback === 'function' && ${callback}($body);").
+        WithHeader("Content-Type", "application/javascript")
+
+// JSONPWithStatus returns a JSONP response with a custom status code.
+func JSONPWithStatus(status StatusCode, callback string, body string) Response =
+    NewResponse(status).
+        WithBody(s"/**/ typeof $callback === 'function' && ${callback}($body);").
+        WithHeader("Content-Type", "application/javascript")
+
+// ============================================================================
+// Blob Variants (HTMLBlob, JSONBlob, XMLBlob)
+// ============================================================================
+
+// HTMLBlob returns a response with HTML content from raw bytes.
+func HTMLBlob(data []byte) Response =
+    NewResponse(StatusOk()).WithBodyBytes(data).WithHeader("Content-Type", "text/html")
+
+// HTMLBlobWithStatus returns a response with HTML content and custom status code.
+func HTMLBlobWithStatus(status StatusCode, data []byte) Response =
+    NewResponse(status).WithBodyBytes(data).WithHeader("Content-Type", "text/html")
+
+// JSONBlob returns a response with JSON content from raw bytes.
+func JSONBlob(data []byte) Response =
+    NewResponse(StatusOk()).WithBodyBytes(data).WithHeader("Content-Type", "application/json")
+
+// JSONBlobWithStatus returns a response with JSON content and custom status code.
+func JSONBlobWithStatus(status StatusCode, data []byte) Response =
+    NewResponse(status).WithBodyBytes(data).WithHeader("Content-Type", "application/json")
+
+// XMLBlob returns a response with XML content from raw bytes.
+func XMLBlob(data []byte) Response =
+    NewResponse(StatusOk()).WithBodyBytes(data).WithHeader("Content-Type", "application/xml")
+
+// XMLBlobWithStatus returns a response with XML content and custom status code.
+func XMLBlobWithStatus(status StatusCode, data []byte) Response =
+    NewResponse(status).WithBodyBytes(data).WithHeader("Content-Type", "application/xml")
+
+// ============================================================================
+// String Response (alias for Text, matches Echo API)
+// ============================================================================
+
+// String returns a response with the given status code and plain text body.
+// Equivalent to Echo's c.String().
+func String(status StatusCode, body string) Response =
+    NewResponse(status).WithBody(body).WithHeader("Content-Type", "text/plain")
+
+// ============================================================================
+// Stream Response
+// ============================================================================
+
+// Stream returns a response with streaming content from a string.
+// For Server-Sent Events, use contentType "text/event-stream".
+func Stream(status StatusCode, contentType string, body string) Response =
+    NewResponse(status).WithBody(body).WithHeader("Content-Type", contentType)
+
+// ============================================================================
+// Redirect Helpers
+// ============================================================================
 
 func Redirect(url string) Response =
     NewResponse(StatusCustom(302)).WithHeader("Location", url)
@@ -87,11 +264,23 @@ func Redirect(url string) Response =
 func RedirectPermanent(url string) Response =
     NewResponse(StatusCustom(301)).WithHeader("Location", url)
 
-// --- Bridge ---
+// ============================================================================
+// Bridge Conversion
+// ============================================================================
 
 // ToBridge converts the Response to a Go bridge response for httpcore.
 func (resp Response) ToBridge() *httpcore.BridgeResponse {
-    val br = httpcore.NewBridgeResponse(resp.Code(), resp.Body)
+    val br = if (resp.BodyBytes.IsDefined()) httpcore.NewBridgeResponseBytes(resp.Code(), resp.BodyBytes.Get().ToGoSlice(), resp.HeaderValue("Content-Type")) else httpcore.NewBridgeResponse(resp.Code(), resp.Body)
     resp.Headers.ForEach((pair) => br.SetHeader(pair.V1, pair.V2))
+    resp.Cookies.ForEach((c) => br.AddCookie(httpcore.BridgeCookie{
+        Name:     c.Name,
+        Value:    c.Value,
+        Path:     c.Path,
+        Domain:   c.Domain,
+        MaxAge:   c.MaxAge,
+        Secure:   c.Secure,
+        HttpOnly: c.HttpOnly,
+        SameSite: c.SameSite,
+    }))
     return br
 }
