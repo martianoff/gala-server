@@ -1,0 +1,107 @@
+package server
+
+import (
+    . "martianoff/gala/test"
+    . "martianoff/gala/collection_immutable"
+)
+
+// ============================================================================
+// SSEEvent Struct Tests
+// ============================================================================
+
+func TestSSEEventCreation(t T) T {
+    val event = SSEEvent(Event = "message", Data = "Hello!", Id = "1", Retry = 0)
+    val t1 = Eq(t, event.Event, "message")
+    val t2 = Eq(t1, event.Data, "Hello!")
+    val t3 = Eq(t2, event.Id, "1")
+    return Eq(t3, event.Retry, 0)
+}
+
+func TestSSEEventWithRetry(t T) T {
+    val event = SSEEvent(Event = "update", Data = "data", Id = "2", Retry = 5000)
+    val t1 = Eq(t, event.Event, "update")
+    return Eq(t1, event.Retry, 5000)
+}
+
+// ============================================================================
+// SSE Response Tests
+// ============================================================================
+
+func TestSSEResponseContentType(t T) T {
+    val events = ArrayOf(
+        SSEEvent(Event = "message", Data = "Hello!", Id = "1", Retry = 0))
+    val resp = SSE(events)
+    val t1 = Eq(t, resp.Code(), 200)
+    return Eq(t1, resp.HeaderValue("Content-Type"), "text/event-stream")
+}
+
+func TestSSEResponseCacheControl(t T) T {
+    val events = ArrayOf(
+        SSEEvent(Event = "message", Data = "Hello!", Id = "1", Retry = 0))
+    val resp = SSE(events)
+    return Eq(t, resp.HeaderValue("Cache-Control"), "no-cache")
+}
+
+func TestSSEResponseConnection(t T) T {
+    val events = ArrayOf(
+        SSEEvent(Event = "message", Data = "Hello!", Id = "1", Retry = 0))
+    val resp = SSE(events)
+    return Eq(t, resp.HeaderValue("Connection"), "keep-alive")
+}
+
+func TestSSEResponseBodyContainsEventType(t T) T {
+    val events = ArrayOf(
+        SSEEvent(Event = "message", Data = "Hello!", Id = "1", Retry = 0))
+    val resp = SSE(events)
+    return Contains(t, resp.Body, "event: message")
+}
+
+func TestSSEResponseBodyContainsData(t T) T {
+    val events = ArrayOf(
+        SSEEvent(Event = "message", Data = "Hello!", Id = "1", Retry = 0))
+    val resp = SSE(events)
+    return Contains(t, resp.Body, "data: Hello!")
+}
+
+func TestSSEResponseBodyContainsId(t T) T {
+    val events = ArrayOf(
+        SSEEvent(Event = "message", Data = "Hello!", Id = "1", Retry = 0))
+    val resp = SSE(events)
+    return Contains(t, resp.Body, "id: 1")
+}
+
+func TestSSEMultipleEvents(t T) T {
+    val events = ArrayOf(
+        SSEEvent(Event = "message", Data = "First", Id = "1", Retry = 0),
+        SSEEvent(Event = "update", Data = "Second", Id = "2", Retry = 0))
+    val resp = SSE(events)
+    val t1 = Contains(t, resp.Body, "event: message")
+    val t2 = Contains(t1, resp.Body, "data: First")
+    val t3 = Contains(t2, resp.Body, "event: update")
+    return Contains(t3, resp.Body, "data: Second")
+}
+
+func TestSSEJsonData(t T) T {
+    val events = ArrayOf(
+        SSEEvent(Event = "update", Data = "{\"count\": 42}", Id = "1", Retry = 0))
+    val resp = SSE(events)
+    return Contains(t, resp.Body, "data: {\"count\": 42}")
+}
+
+// ============================================================================
+// SSEStream Tests
+// ============================================================================
+
+func TestSSEStreamSingleEvent(t T) T {
+    val resp = SSEStream("notification", "You have mail")
+    val t1 = Eq(t, resp.Code(), 200)
+    val t2 = Eq(t1, resp.HeaderValue("Content-Type"), "text/event-stream")
+    val t3 = Contains(t2, resp.Body, "event: notification")
+    return Contains(t3, resp.Body, "data: You have mail")
+}
+
+func TestSSEStreamHeaders(t T) T {
+    val resp = SSEStream("ping", "pong")
+    val t1 = Eq(t, resp.HeaderValue("Cache-Control"), "no-cache")
+    return Eq(t1, resp.HeaderValue("Connection"), "keep-alive")
+}

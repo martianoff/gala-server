@@ -20,108 +20,108 @@ func testReq(method string, path string) *httpcore.TestRequestBuilder {
 func TestNewServer(t T) T {
 	var s = std.NewImmutable(NewServer())
 	var t1 = std.NewImmutable(Eq(t, s.Get().RouteCount(), 0))
-	var t2 = std.NewImmutable(Eq(t1.Get(), s.Get().Port.Get(), 8080))
-	var t3 = std.NewImmutable(Eq(t2.Get(), s.Get().Name.Get(), "GALA Server"))
+	var t2 = std.NewImmutable(Eq(t1.Get(), s.Get().Port, 8080))
+	var t3 = std.NewImmutable(Eq(t2.Get(), s.Get().Name, "GALA Server"))
 	var t4 = std.NewImmutable(Eq(t3.Get(), s.Get().FilterCount(), 0))
-	return IsFalse(t4.Get(), s.Get().Debug.Get())
+	return IsFalse(t4.Get(), s.Get().Debug)
 }
 func TestWithPort(t T) T {
 	var s = std.NewImmutable(NewServer().WithPort(9090))
-	return Eq(t, s.Get().Port.Get(), 9090)
+	return Eq(t, s.Get().Port, 9090)
 }
 func TestWithName(t T) T {
 	var s = std.NewImmutable(NewServer().WithName("My API"))
-	return Eq(t, s.Get().Name.Get(), "My API")
+	return Eq(t, s.Get().Name, "My API")
 }
 func TestWithDebug(t T) T {
 	var s = std.NewImmutable(NewServer().WithDebug(true))
-	return IsTrue(t, s.Get().Debug.Get())
+	return IsTrue(t, s.Get().Debug)
 }
 func TestWithBanner(t T) T {
 	var s = std.NewImmutable(NewServer().WithBanner(false))
-	return IsFalse(t, s.Get().Banner.Get())
+	return IsFalse(t, s.Get().Banner)
 }
 func TestConfigPreservedAcrossBuilderCalls(t T) T {
-	var s = std.NewImmutable(NewServer().WithPort(3000).WithName("Test API").WithDebug(true).WithBanner(false).GET("/hello", func(req Request) Response {
+	var s = std.NewImmutable(NewServer().WithPort(3000).WithName("Test API").WithDebug(true).WithBanner(false).GET("/hello", func(req any) Response {
 		return Ok("hello")
 	}).WithFilter(Logger()))
-	var t1 = std.NewImmutable(Eq(t, s.Get().Port.Get(), 3000))
-	var t2 = std.NewImmutable(Eq(t1.Get(), s.Get().Name.Get(), "Test API"))
-	var t3 = std.NewImmutable(IsTrue(t2.Get(), s.Get().Debug.Get()))
-	var t4 = std.NewImmutable(IsFalse(t3.Get(), s.Get().Banner.Get()))
+	var t1 = std.NewImmutable(Eq(t, s.Get().Port, 3000))
+	var t2 = std.NewImmutable(Eq(t1.Get(), s.Get().Name, "Test API"))
+	var t3 = std.NewImmutable(IsTrue(t2.Get(), s.Get().Debug))
+	var t4 = std.NewImmutable(IsFalse(t3.Get(), s.Get().Banner))
 	var t5 = std.NewImmutable(Eq(t4.Get(), s.Get().RouteCount(), 1))
 	return Eq(t5.Get(), s.Get().FilterCount(), 1)
 }
 func TestServerGET(t T) T {
-	var s = std.NewImmutable(NewServer().GET("/hello", func(req Request) Response {
+	var s = std.NewImmutable(NewServer().GET("/hello", func(req any) Response {
 		return Ok("hello")
 	}))
 	return Eq(t, s.Get().RouteCount(), 1)
 }
 func TestServerMultipleRoutes(t T) T {
-	var s = std.NewImmutable(NewServer().GET("/", func(req Request) Response {
+	var s = std.NewImmutable(NewServer().GET("/", func(req any) Response {
 		return Ok("home")
-	}).POST("/users", func(req Request) Response {
+	}).POST("/users", func(req any) Response {
 		return Created("ok")
-	}).DELETE("/users/{id}", func(req Request) Response {
+	}).DELETE("/users/{id}", func(req any) Response {
 		return NoContent()
 	}))
 	return Eq(t, s.Get().RouteCount(), 3)
 }
 func TestServerAllMethods(t T) T {
-	var s = std.NewImmutable(NewServer().GET("/get", func(req Request) Response {
+	var s = std.NewImmutable(NewServer().GET("/get", func(req any) Response {
 		return Ok("get")
-	}).POST("/post", func(req Request) Response {
+	}).POST("/post", func(req any) Response {
 		return Ok("post")
-	}).PUT("/put", func(req Request) Response {
+	}).PUT("/put", func(req any) Response {
 		return Ok("put")
-	}).DELETE("/del", func(req Request) Response {
+	}).DELETE("/del", func(req any) Response {
 		return Ok("del")
-	}).PATCH("/patch", func(req Request) Response {
+	}).PATCH("/patch", func(req any) Response {
 		return Ok("patch")
-	}).HEAD("/head", func(req Request) Response {
+	}).HEAD("/head", func(req any) Response {
 		return Ok("head")
-	}).OPTIONS("/opts", func(req Request) Response {
+	}).OPTIONS("/opts", func(req any) Response {
 		return Ok("opts")
 	}))
 	return Eq(t, s.Get().RouteCount(), 7)
 }
 func TestServerImmutability(t T) T {
-	var s1 = std.NewImmutable(NewServer().GET("/a", func(req Request) Response {
+	var s1 = std.NewImmutable(NewServer().GET("/a", func(req any) Response {
 		return Ok("a")
 	}))
-	var s2 = std.NewImmutable(s1.Get().GET("/b", func(req Request) Response {
+	var s2 = std.NewImmutable(s1.Get().GET("/b", func(req any) Response {
 		return Ok("b")
 	}))
 	var t1 = std.NewImmutable(Eq(t, s1.Get().RouteCount(), 1))
 	return Eq(t1.Get(), s2.Get().RouteCount(), 2)
 }
 func TestServerAnyMethod(t T) T {
-	var s = std.NewImmutable(NewServer().Any("/wildcard", func(req Request) Response {
+	var s = std.NewImmutable(NewServer().Any("/wildcard", func(req any) Response {
 		return Ok("any")
 	}))
 	return Eq(t, s.Get().RouteCount(), 7)
 }
 func TestWithShutdownTimeout(t T) T {
 	var s = std.NewImmutable(NewServer().WithShutdownTimeout(10 * time.Second))
-	return Eq(t, s.Get().ShutdownTimeout.Get(), 10*time.Second)
+	return Eq(t, s.Get().ShutdownTimeout, 10*time.Second)
 }
 func TestWithNotFoundHandler(t T) T {
-	var s = std.NewImmutable(NewServer().WithNotFound(func(req Request) Response {
+	var s = std.NewImmutable(NewServer().WithNotFound(func(req any) Response {
 		return NotFound("custom 404")
 	}))
-	return IsTrue(t, s.Get().NotFoundHandler.Get() != nil)
+	return IsTrue(t, s.Get().NotFoundHandler != nil)
 }
 func TestWithErrorHandler(t T) T {
-	var s = std.NewImmutable(NewServer().WithErrorHandler(func(err error) Response {
+	var s = std.NewImmutable(NewServer().WithErrorHandler(func(err any) Response {
 		return InternalError("custom error")
 	}))
-	return IsTrue(t, s.Get().ErrorHandler.Get() != nil)
+	return IsTrue(t, s.Get().ErrorHandler != nil)
 }
 func TestServerRoutesDebug(t T) T {
-	var s = std.NewImmutable(NewServer().GET("/hello", func(req Request) Response {
+	var s = std.NewImmutable(NewServer().GET("/hello", func(req any) Response {
 		return Ok("hello")
-	}).POST("/users", func(req Request) Response {
+	}).POST("/users", func(req any) Response {
 		return Created("ok")
 	}))
 	var routes = std.NewImmutable(s.Get().Routes())
@@ -129,11 +129,11 @@ func TestServerRoutesDebug(t T) T {
 	return t1.Get()
 }
 func TestStaticRouteRegistration(t T) T {
-	var s = std.NewImmutable(NewServer().Static("/public/", "./static").Static("/assets/", "./assets").GET("/api/health", func(req Request) Response {
+	var s = std.NewImmutable(NewServer().Static("/public/", "./static").Static("/assets/", "./assets").GET("/api/health", func(req any) Response {
 		return Ok("ok")
 	}))
 	var t1 = std.NewImmutable(Eq(t, s.Get().RouteCount(), 1))
-	return Eq(t1.Get(), s.Get().Statics.Get().Size(), 2)
+	return Eq(t1.Get(), s.Get().Statics.Size(), 2)
 }
 func TestOk(t T) T {
 	var resp = std.NewImmutable(Ok("hello"))
@@ -436,14 +436,14 @@ func TestRequestCtxGetMissing(t T) T {
 	return IsNone(t, req.Get().CtxGet("missing"))
 }
 func TestWithFilter(t T) T {
-	var s = std.NewImmutable(NewServer().GET("/", func(req Request) Response {
+	var s = std.NewImmutable(NewServer().GET("/", func(req any) Response {
 		return Ok("hello")
 	}).WithFilter(Logger()).WithFilter(Recovery()))
 	var t1 = std.NewImmutable(Eq(t, s.Get().RouteCount(), 1))
 	return Eq(t1.Get(), s.Get().FilterCount(), 2)
 }
 func TestFilterImmutability(t T) T {
-	var s1 = std.NewImmutable(NewServer().GET("/a", func(req Request) Response {
+	var s1 = std.NewImmutable(NewServer().GET("/a", func(req any) Response {
 		return Ok("a")
 	}))
 	var s2 = std.NewImmutable(s1.Get().WithFilter(Logger()))
@@ -469,22 +469,22 @@ func TestAuthCreation(t T) T {
 	return IsTrue(t, Auth() != nil)
 }
 func TestAuthWithValidatorCreation(t T) T {
-	return IsTrue(t, AuthWithValidator(func(h string) bool {
+	return IsTrue(t, AuthWithValidator(func(h any) bool {
 		return h == "valid"
 	}) != nil)
 }
 func TestAuthBearerCreation(t T) T {
-	return IsTrue(t, AuthBearer(func(token string) bool {
+	return IsTrue(t, AuthBearer(func(token any) bool {
 		return token == "valid"
 	}) != nil)
 }
 func TestBasicAuthCreation(t T) T {
-	return IsTrue(t, BasicAuth(func(u string, p string) bool {
+	return IsTrue(t, BasicAuth(func(u any, p any) bool {
 		return u == "admin"
 	}) != nil)
 }
 func TestKeyAuthCreation(t T) T {
-	return IsTrue(t, KeyAuth("header:X-API-Key", func(k string) bool {
+	return IsTrue(t, KeyAuth("header:X-API-Key", func(k any) bool {
 		return k == "secret"
 	}) != nil)
 }
@@ -560,7 +560,7 @@ func TestGroupPreservesExistingRoutes(t T) T {
 	var api = std.NewImmutable(NewGroup().GET("/items", func(req Request) Response {
 		return Ok("items")
 	}))
-	var s = std.NewImmutable(NewServer().GET("/health", func(req Request) Response {
+	var s = std.NewImmutable(NewServer().GET("/health", func(req any) Response {
 		return Ok("ok")
 	}).Group("/api", api.Get()))
 	return Eq(t, s.Get().RouteCount(), 2)
@@ -576,16 +576,16 @@ func TestGroupMultipleGroups(t T) T {
 	return Eq(t, s.Get().RouteCount(), 2)
 }
 func TestRouteFilter(t T) T {
-	var s = std.NewImmutable(NewServer().GET("/public", func(req Request) Response {
+	var s = std.NewImmutable(NewServer().GET("/public", func(req any) Response {
 		return Ok("public")
-	}).GET("/secret", func(req Request) Response {
+	}).GET("/secret", func(req any) Response {
 		return Ok("secret")
 	}, Auth()))
 	var t1 = std.NewImmutable(Eq(t, s.Get().RouteCount(), 2))
 	return Eq(t1.Get(), s.Get().FilterCount(), 0)
 }
 func TestRouteMultipleFilters(t T) T {
-	var s = std.NewImmutable(NewServer().GET("/admin", func(req Request) Response {
+	var s = std.NewImmutable(NewServer().GET("/admin", func(req any) Response {
 		return Ok("admin")
 	}, Auth(), Logger()))
 	return Eq(t, s.Get().RouteCount(), 1)
@@ -594,7 +594,7 @@ func TestGroupFilters(t T) T {
 	var api = std.NewImmutable(NewGroup().GET("/users", func(req Request) Response {
 		return Ok("users")
 	}).WithFilter(Auth()))
-	var s = std.NewImmutable(NewServer().GET("/health", func(req Request) Response {
+	var s = std.NewImmutable(NewServer().GET("/health", func(req any) Response {
 		return Ok("ok")
 	}).Group("/api", api.Get()).WithFilter(Logger()))
 	var t1 = std.NewImmutable(Eq(t, s.Get().RouteCount(), 2))
@@ -604,7 +604,7 @@ func TestGroupFiltersDoNotLeakToParent(t T) T {
 	var api = std.NewImmutable(NewGroup().GET("/secret", func(req Request) Response {
 		return Ok("secret")
 	}).WithFilter(Auth()).WithFilter(Recovery()))
-	var s = std.NewImmutable(NewServer().GET("/public", func(req Request) Response {
+	var s = std.NewImmutable(NewServer().GET("/public", func(req any) Response {
 		return Ok("public")
 	}).Group("/api", api.Get()))
 	return Eq(t, s.Get().FilterCount(), 0)
@@ -707,17 +707,17 @@ func TestStreamResponse(t T) T {
 	return Contains(t2.Get(), resp.Get().Body.Get(), "data: hello")
 }
 func TestServerNamed(t T) T {
-	var s = std.NewImmutable(NewServer().GET("/users", func(req Request) Response {
+	var s = std.NewImmutable(NewServer().GET("/users", func(req any) Response {
 		return Ok("users")
-	}).Named("user-list").GET("/users/{id}", func(req Request) Response {
+	}).Named("user-list").GET("/users/{id}", func(req any) Response {
 		return Ok("user")
 	}).Named("user-detail"))
 	return Eq(t, s.Get().RouteCount(), 2)
 }
 func TestServerURLGeneration(t T) T {
-	var s = std.NewImmutable(NewServer().GET("/users", func(req Request) Response {
+	var s = std.NewImmutable(NewServer().GET("/users", func(req any) Response {
 		return Ok("users")
-	}).Named("user-list").GET("/users/{id}", func(req Request) Response {
+	}).Named("user-list").GET("/users/{id}", func(req any) Response {
 		return Ok("user")
 	}).Named("user-detail"))
 	var t1 = std.NewImmutable(IsSome(t, s.Get().URL("user-list")))
@@ -738,22 +738,218 @@ func TestFullFrameworkConfiguration(t T) T {
 	}).WithFilter(Auth()))
 	var admin = std.NewImmutable(NewGroup().GET("/stats", func(req Request) Response {
 		return Ok("stats")
-	}).WithFilter(AuthBearer(func(token string) bool {
+	}).WithFilter(AuthBearer(func(token any) bool {
 		return token == "admin"
 	})))
-	var s = std.NewImmutable(NewServer().WithName("Full API").WithPort(9090).WithShutdownTimeout(15*time.Second).WithDebug(true).WithBanner(false).WithErrorHandler(func(err error) Response {
+	var s = std.NewImmutable(NewServer().WithName("Full API").WithPort(9090).WithShutdownTimeout(15*time.Second).WithDebug(true).WithBanner(false).WithErrorHandler(func(err any) Response {
 		return JsonResponse(fmt.Sprintf("{\"error\": \"%v\"}", err))
-	}).WithNotFound(func(req Request) Response {
+	}).WithNotFound(func(req any) Response {
 		return NotFound("custom 404")
-	}).GET("/", func(req Request) Response {
+	}).GET("/", func(req any) Response {
 		return Ok("Hello, GALA!")
-	}).GET("/health", func(req Request) Response {
+	}).GET("/health", func(req any) Response {
 		return JsonResponse("{\"status\": \"ok\"}")
 	}).Static("/public/", "./static").Group("/api/v1", api.Get()).Group("/admin", admin.Get()).WithFilter(Logger()).WithFilter(Recovery()).WithFilter(Cors()).WithFilter(RateLimit(1000.0, 100.0)).WithFilter(RequestId()))
-	var t1 = std.NewImmutable(Eq(t, s.Get().Port.Get(), 9090))
-	var t2 = std.NewImmutable(Eq(t1.Get(), s.Get().Name.Get(), "Full API"))
-	var t3 = std.NewImmutable(IsTrue(t2.Get(), s.Get().Debug.Get()))
-	var t4 = std.NewImmutable(IsFalse(t3.Get(), s.Get().Banner.Get()))
+	var t1 = std.NewImmutable(Eq(t, s.Get().Port, 9090))
+	var t2 = std.NewImmutable(Eq(t1.Get(), s.Get().Name, "Full API"))
+	var t3 = std.NewImmutable(IsTrue(t2.Get(), s.Get().Debug))
+	var t4 = std.NewImmutable(IsFalse(t3.Get(), s.Get().Banner))
 	var t5 = std.NewImmutable(Eq(t4.Get(), s.Get().RouteCount(), 5))
 	return Eq(t5.Get(), s.Get().FilterCount(), 5)
 }
+func TestWithBasePath(t T) T {
+	var s = std.NewImmutable(NewServer().WithBasePath("/api/v1"))
+	return Eq(t, s.Get().BasePath, "/api/v1")
+}
+func TestBasePathDefault(t T) T {
+	var s = std.NewImmutable(NewServer())
+	return Eq(t, s.Get().BasePath, "")
+}
+func TestBasePathPreservedAcrossBuilderCalls(t T) T {
+	var s = std.NewImmutable(NewServer().WithBasePath("/api/v1").WithPort(9090).GET("/users", func(req any) Response {
+		return Ok("users")
+	}))
+	var t1 = std.NewImmutable(Eq(t, s.Get().BasePath, "/api/v1"))
+	var t2 = std.NewImmutable(Eq(t1.Get(), s.Get().Port, 9090))
+	return Eq(t2.Get(), s.Get().RouteCount(), 1)
+}
+func TestBasePathWithRoutes(t T) T {
+	var s = std.NewImmutable(NewServer().WithBasePath("/api/v1").GET("/users", func(req any) Response {
+		return Ok("users")
+	}).POST("/items", func(req any) Response {
+		return Created("ok")
+	}))
+	var routes = std.NewImmutable(s.Get().Routes())
+	var t1 = std.NewImmutable(Eq(t, routes.Get().Size(), 2))
+	return Eq(t1.Get(), s.Get().BasePath, "/api/v1")
+}
+func TestListenTLSExists(t T) T {
+	var s = std.NewImmutable(NewServer().WithPort(8443))
+	return Eq(t, s.Get().Port, 8443)
+}
+func TestWithHealthCheck(t T) T {
+	var s = std.NewImmutable(NewServer().WithHealthCheck("/health"))
+	return Eq(t, s.Get().RouteCount(), 1)
+}
+func TestWithHealthCheckMultiple(t T) T {
+	var s = std.NewImmutable(NewServer().WithHealthCheck("/health").GET("/api", func(req any) Response {
+		return Ok("api")
+	}))
+	return Eq(t, s.Get().RouteCount(), 2)
+}
+func TestWithReadiness(t T) T {
+	var s = std.NewImmutable(NewServer().WithReadiness("/ready", func() bool {
+		return true
+	}))
+	return Eq(t, s.Get().RouteCount(), 1)
+}
+func TestWithReadinessMultiple(t T) T {
+	var s = std.NewImmutable(NewServer().WithReadiness("/ready", func() bool {
+		return true
+	}).GET("/api", func(req any) Response {
+		return Ok("api")
+	}))
+	return Eq(t, s.Get().RouteCount(), 2)
+}
+func TestWithWarmup(t T) T {
+	var warmedUp = false
+	var s = std.NewImmutable(NewServer().WithWarmup(func() any {
+		warmedUp = true
+		return nil
+	}))
+	return IsTrue(t, s.Get().warmup.IsDefined())
+}
+func TestWithWarmupDefault(t T) T {
+	var s = std.NewImmutable(NewServer())
+	return IsTrue(t, s.Get().warmup.IsEmpty())
+}
+func TestWithErrorMapper(t T) T {
+	var mapper = std.NewImmutable(func(err error) std.Option[Response] {
+		return std.Some[Response]{}.Apply(BadRequest(fmt.Sprintf("mapped: %v", err)))
+	})
+	var s = std.NewImmutable(NewServer().WithErrorMapper(mapper.Get()))
+	return IsTrue(t, s.Get().errorMapper.IsDefined())
+}
+func TestWithErrorMapperDefault(t T) T {
+	var s = std.NewImmutable(NewServer())
+	return IsTrue(t, s.Get().errorMapper.IsEmpty())
+}
+func TestStatusUnprocessableEntityCode(t T) T {
+	return Eq(t, StatusUnprocessableEntity{}.Apply().Code(), 422)
+}
+func TestStatusTooManyRequestsCode(t T) T {
+	return Eq(t, StatusTooManyRequests{}.Apply().Code(), 429)
+}
+func TestStatusRequestTimeoutCode(t T) T {
+	return Eq(t, StatusRequestTimeout{}.Apply().Code(), 408)
+}
+func TestStatusBadGatewayCode(t T) T {
+	return Eq(t, StatusBadGateway{}.Apply().Code(), 502)
+}
+func TestExtendedStatusCodeValues(t T) T {
+	var t1 = std.NewImmutable(Eq(t, StatusUnprocessableEntity{}.Apply().Code(), 422))
+	var t2 = std.NewImmutable(Eq(t1.Get(), StatusTooManyRequests{}.Apply().Code(), 429))
+	var t3 = std.NewImmutable(Eq(t2.Get(), StatusRequestTimeout{}.Apply().Code(), 408))
+	return Eq(t3.Get(), StatusBadGateway{}.Apply().Code(), 502)
+}
+func TestMethodCustom(t T) T {
+	var m = std.NewImmutable(CUSTOM{}.Apply("PURGE"))
+	return Eq(t, m.Get().Name(), "PURGE")
+}
+func TestMethodCustomArbitrary(t T) T {
+	var m = std.NewImmutable(CUSTOM{}.Apply("LINK"))
+	return Eq(t, m.Get().Name(), "LINK")
+}
+func TestToMethodUnknown(t T) T {
+	var m = std.NewImmutable(toMethod("PURGE"))
+	return Eq(t, m.Get().Name(), "PURGE")
+}
+func TestToMethodKnown(t T) T {
+	var t1 = std.NewImmutable(Eq(t, toMethod("GET").Name(), "GET"))
+	var t2 = std.NewImmutable(Eq(t1.Get(), toMethod("POST").Name(), "POST"))
+	var t3 = std.NewImmutable(Eq(t2.Get(), toMethod("PUT").Name(), "PUT"))
+	var t4 = std.NewImmutable(Eq(t3.Get(), toMethod("DELETE").Name(), "DELETE"))
+	var t5 = std.NewImmutable(Eq(t4.Get(), toMethod("PATCH").Name(), "PATCH"))
+	var t6 = std.NewImmutable(Eq(t5.Get(), toMethod("HEAD").Name(), "HEAD"))
+	return Eq(t6.Get(), toMethod("OPTIONS").Name(), "OPTIONS")
+}
+func TestNegotiateJson(t T) T {
+	var r = std.NewImmutable(buildReq(testReq("GET", "/").WithHeader("Accept", "application/json")))
+	var resp = std.NewImmutable(Negotiate(r.Get(), func() Response {
+		return JsonResponse("{\"ok\":true}")
+	}, func() Response {
+		return Html("<p>ok</p>")
+	}, func() Response {
+		return Text("ok")
+	}))
+	var t1 = std.NewImmutable(Eq(t, resp.Get().Code(), 200))
+	return Eq(t1.Get(), resp.Get().HeaderValue("Content-Type"), "application/json")
+}
+func TestNegotiateHtml(t T) T {
+	var r = std.NewImmutable(buildReq(testReq("GET", "/").WithHeader("Accept", "text/html")))
+	var resp = std.NewImmutable(Negotiate(r.Get(), func() Response {
+		return JsonResponse("{\"ok\":true}")
+	}, func() Response {
+		return Html("<p>ok</p>")
+	}, func() Response {
+		return Text("ok")
+	}))
+	var t1 = std.NewImmutable(Eq(t, resp.Get().Code(), 200))
+	return Eq(t1.Get(), resp.Get().HeaderValue("Content-Type"), "text/html")
+}
+func TestNegotiateFallback(t T) T {
+	var r = std.NewImmutable(buildReq(testReq("GET", "/").WithHeader("Accept", "text/plain")))
+	var resp = std.NewImmutable(Negotiate(r.Get(), func() Response {
+		return JsonResponse("{\"ok\":true}")
+	}, func() Response {
+		return Html("<p>ok</p>")
+	}, func() Response {
+		return Text("ok")
+	}))
+	var t1 = std.NewImmutable(Eq(t, resp.Get().Code(), 200))
+	return Eq(t1.Get(), resp.Get().HeaderValue("Content-Type"), "text/plain")
+}
+func TestUnprocessableEntityConstructor(t T) T {
+	var resp = std.NewImmutable(UnprocessableEntity("invalid"))
+	var t1 = std.NewImmutable(Eq(t, resp.Get().Code(), 422))
+	return Eq(t1.Get(), resp.Get().Body.Get(), "invalid")
+}
+func TestTooManyRequestsConstructor(t T) T {
+	var resp = std.NewImmutable(TooManyRequests("slow down"))
+	var t1 = std.NewImmutable(Eq(t, resp.Get().Code(), 429))
+	return Eq(t1.Get(), resp.Get().Body.Get(), "slow down")
+}
+func TestRequestTimeoutConstructor(t T) T {
+	var resp = std.NewImmutable(RequestTimeout())
+	return Eq(t, resp.Get().Code(), 408)
+}
+func TestBadGatewayConstructor(t T) T {
+	var resp = std.NewImmutable(BadGateway("upstream error"))
+	var t1 = std.NewImmutable(Eq(t, resp.Get().Code(), 502))
+	return Eq(t1.Get(), resp.Get().Body.Get(), "upstream error")
+}
+func TestResponseCopyWithHeader(t T) T {
+	var r1 = std.NewImmutable(Ok("hello"))
+	var r2 = std.NewImmutable(r1.Get().WithHeader("X-Test", "value"))
+	var t1 = std.NewImmutable(Eq(t, r1.Get().HeaderValue("X-Test"), ""))
+	return Eq(t1.Get(), r2.Get().HeaderValue("X-Test"), "value")
+}
+func TestResponseCopyWithBody(t T) T {
+	var r1 = std.NewImmutable(Ok("original"))
+	var r2 = std.NewImmutable(r1.Get().WithBody("updated"))
+	var t1 = std.NewImmutable(Eq(t, r1.Get().Body.Get(), "original"))
+	return Eq(t1.Get(), r2.Get().Body.Get(), "updated")
+}
+func TestResponseCopyWithStatus(t T) T {
+	var r1 = std.NewImmutable(Ok("hello"))
+	var r2 = std.NewImmutable(r1.Get().WithStatus(StatusNotFound{}.Apply()))
+	var t1 = std.NewImmutable(Eq(t, r1.Get().Code(), 200))
+	return Eq(t1.Get(), r2.Get().Code(), 404)
+}
+func TestResponseCopyChained(t T) T {
+	var resp = std.NewImmutable(Ok("original").WithBody("updated").WithHeader("X-A", "1").WithStatus(StatusCreated{}.Apply()))
+	var t1 = std.NewImmutable(Eq(t, resp.Get().Body.Get(), "updated"))
+	var t2 = std.NewImmutable(Eq(t1.Get(), resp.Get().HeaderValue("X-A"), "1"))
+	return Eq(t2.Get(), resp.Get().Code(), 201)
+}
+

@@ -689,30 +689,63 @@ func CircuitBreaker(
 // Retry Filter
 // ========================
 
+func retryLoop(req Request, next Handler, maxRetries int, backoff time.Duration) Future[Response] {
+    var lastResp = InternalError("Request failed: no attempts made")
+    var attempts = 0
+    for attempts <= maxRetries {
+        val result = next(req).Await()
+        if result.IsSuccess() {
+            val resp = result.Get()
+            lastResp = resp
+            if resp.Code() < 500 || attempts >= maxRetries {
+                return FutureOf(lastResp)
+            }
+        } else {
+            lastResp = InternalError("Request failed")
+            if attempts >= maxRetries {
+                return FutureOf(lastResp)
+            }
+        }
+        time.Sleep(backoff)
+        attempts = attempts + 1
+    }
+    return FutureOf(lastResp)
+}
+
+func retryLoopWithBackoff(req Request, next Handler, maxRetries int, initialBackoff time.Duration, maxBackoff time.Duration) Future[Response] {
+    var lastResp = InternalError("Request failed: no attempts made")
+    var attempts = 0
+    var currentBackoff = initialBackoff
+    for attempts <= maxRetries {
+        val result = next(req).Await()
+        if result.IsSuccess() {
+            val resp = result.Get()
+            lastResp = resp
+            if resp.Code() < 500 || attempts >= maxRetries {
+                return FutureOf(lastResp)
+            }
+        } else {
+            lastResp = InternalError("Request failed")
+            if attempts >= maxRetries {
+                return FutureOf(lastResp)
+            }
+        }
+        time.Sleep(currentBackoff)
+        currentBackoff = currentBackoff * 2
+        if currentBackoff > maxBackoff {
+            currentBackoff = maxBackoff
+        }
+        attempts = attempts + 1
+    }
+    return FutureOf(lastResp)
+}
+
 // Retry returns a filter that retries failed requests up to maxRetries times
 // with a fixed backoff duration between attempts.
 func Retry(maxRetries int = 3, backoff time.Duration = 100 * time.Millisecond) Filter =
-    (req Request, next Handler) => FutureApply[Response](() => {
-        var lastResp = InternalError("Request failed: no attempts made")
-        var attempts = 0
-        for attempts <= maxRetries {
-            val result = next(req).Await()
-            val shouldRetry = result match {
-                case Success(resp) =>
-                    lastResp = resp
-                    return resp.Code() >= 500 && attempts < maxRetries
-                case Failure(err) =>
-                    lastResp = InternalError(s"Request failed: $err")
-                    return attempts < maxRetries
-            }
-            if !shouldRetry {
-                return lastResp
-            }
-            time.Sleep(backoff)
-            attempts = attempts + 1
-        }
-        return lastResp
-    })
+    (req Request, next Handler) => {
+        return retryLoop(req, next, maxRetries, backoff)
+    }
 
 // RetryWithBackoff returns a filter that retries with exponential backoff.
 // The backoff duration doubles after each attempt, capped at maxBackoff.
@@ -721,32 +754,9 @@ func RetryWithBackoff(
     initialBackoff time.Duration = 100 * time.Millisecond,
     maxBackoff time.Duration = 5 * time.Second,
 ) Filter =
-    (req Request, next Handler) => FutureApply[Response](() => {
-        var lastResp = InternalError("Request failed: no attempts made")
-        var attempts = 0
-        var currentBackoff = initialBackoff
-        for attempts <= maxRetries {
-            val result = next(req).Await()
-            val shouldRetry = result match {
-                case Success(resp) =>
-                    lastResp = resp
-                    return resp.Code() >= 500 && attempts < maxRetries
-                case Failure(err) =>
-                    lastResp = InternalError(s"Request failed: $err")
-                    return attempts < maxRetries
-            }
-            if !shouldRetry {
-                return lastResp
-            }
-            time.Sleep(currentBackoff)
-            currentBackoff = currentBackoff * 2
-            if currentBackoff > maxBackoff {
-                currentBackoff = maxBackoff
-            }
-            attempts = attempts + 1
-        }
-        return lastResp
-    })
+    (req Request, next Handler) => {
+        return retryLoopWithBackoff(req, next, maxRetries, initialBackoff, maxBackoff)
+    }
 
 // ========================
 // Bulkhead (Concurrency Limiter) Filter
