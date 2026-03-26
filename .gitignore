@@ -45,3 +45,4 @@ TODO.md
 BUGS.md
 .claude
 *.gen.go
+server_test.gen.go
