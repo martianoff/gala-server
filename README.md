@@ -1,6 +1,25 @@
 # GALA Server
 
-A fast, immutable HTTP server library for the [GALA language](https://github.com/martianoff/gala). Inspired by Twitter Finagle's filter model, Scala's immutable builders, and Go Echo's ergonomics.
+A fast, immutable HTTP server library for the [GALA language](https://github.com/martianoff/gala). Inspired by Twitter Finagle's filter model, Scala's immutable builders, and Go Echo's ergonomics -- with resilience features that go well beyond any Go framework.
+
+## Features
+
+- **Immutable builder pattern** -- every method returns a new Server (no mutation, no races)
+- **Sealed types** -- Method and StatusCode are exhaustive, pattern-matchable enums
+- **35+ built-in filters** -- logging, auth (Bearer, Basic, JWT, API key), CORS, CSRF, rate limiting, gzip, proxy, security headers, circuit breaker, retry, bulkhead, ETag, caching, and more
+- **Filter algebra** -- compose, conditionally apply, or skip filters with `ComposeFilters`, `When`, `Skip`
+- **Type-safe extractors** -- `PathParam`, `QueryRequired`, `HeaderRequired`, `BodyAs[T]` returning `Try[T]`
+- **TLS/HTTPS** -- `ListenTLS`, `ListenGracefulTLS` with cert/key
+- **Server-Sent Events** -- `SSE()` and `SSEStream()` for real-time push
+- **Resilience** -- `CircuitBreaker` (3-state), `Retry` / `RetryWithBackoff`, `Bulkhead` concurrency limiter
+- **Content negotiation** -- `Accepts`, `AcceptsJSON`, `Negotiate` for multi-format APIs
+- **Health & readiness** -- `WithHealthCheck`, `WithReadiness` for container orchestration
+- **Error mapping** -- `WithErrorMapper` converts domain errors to HTTP responses
+- **Zero-reflection JSON** -- codec-based serialization via `JsonFrom[T]`
+- **Base path** -- `WithBasePath("/api/v1")` prefixes all routes
+- **Graceful shutdown** -- `ListenGraceful()` with configurable timeout
+- **Warmup** -- `WithWarmup` runs initialization before accepting traffic
+- **Go bridge** -- thin httpcore layer (~500 lines) is the only Go code
 
 ## Quick Start
 
@@ -24,6 +43,86 @@ func main() {
 
     server.ListenGraceful()
 }
+```
+
+## TLS / HTTPS
+
+```gala
+server.ListenTLS("cert.pem", "key.pem")
+server.ListenGracefulTLS("cert.pem", "key.pem")
+```
+
+## Type-Safe Extractors
+
+Extractors return `Try[T]` for clean error handling via pattern matching:
+
+```gala
+func getUser(req Request) Response =
+    PathParamInt(req, "id") match {
+        case Success(id) => Ok(s"User $id")
+        case Failure(err) => BadRequest(s"Invalid ID: $err")
+    }
+```
+
+Available extractors: `PathParam`, `PathParamInt`, `QueryRequired`, `QueryInt`, `HeaderRequired`, `BodyAs[T]`.
+
+## Server-Sent Events
+
+```gala
+server.GET("/events", (req) => {
+    val events = ArrayOf(
+        SSEEvent(Event = "message", Data = "Hello!", Id = "1", Retry = 0),
+        SSEEvent(Event = "update", Data = "{\"count\": 42}", Id = "2", Retry = 0),
+    )
+    return SSE(events)
+})
+```
+
+## Resilience Filters
+
+```gala
+// Circuit breaker: opens after 5 failures, resets after 30s
+server.WithFilter(CircuitBreaker(maxFailures = 5, resetTimeout = 30 * time.Second))
+
+// Retry with exponential backoff
+server.WithFilter(RetryWithBackoff(maxRetries = 3, initialBackoff = 100 * time.Millisecond))
+
+// Bulkhead: limit concurrent requests
+server.WithFilter(Bulkhead(maxConcurrent = 100))
+```
+
+## Filter Algebra
+
+Compose and conditionally apply filters:
+
+```gala
+// Compose two filters into one
+val secured = ComposeFilters(Auth(), RateLimit(100.0, 10.0))
+
+// Apply filter only when predicate is true
+val authWhenNotHealth = When((req) => req.Path() != "/health", Auth())
+
+// Skip filter for specific paths
+val logExceptHealth = Skip(Logger(), "/health", "/ready")
+```
+
+## Content Negotiation
+
+```gala
+func handler(req Request) Response =
+    Negotiate(req,
+        () => JsonResponse("{\"msg\": \"hello\"}"),
+        () => Html("<p>hello</p>"),
+        () => Text("hello"),
+    )
+```
+
+## Health & Readiness
+
+```gala
+server.
+    WithHealthCheck("/health").
+    WithReadiness("/ready", () => dbPool.IsConnected())
 ```
 
 ## Prerequisites
@@ -63,15 +162,17 @@ bazel build //...
 
 ```
 gala-server/
-  types.gala          # Core types: Method, StatusCode, HTTPError, Cookie, etc.
-  request.gala        # Request API (params, query, headers, body, context)
-  response.gala       # Response constructors and builders
-  filter.gala         # All built-in filters (middleware)
+  types.gala          # Core types: Method, StatusCode, HTTPError, ErrorMapper, etc.
+  request.gala        # Request API (params, query, headers, body, context, content negotiation)
+  response.gala       # Response constructors and builders (including Negotiate)
+  filter.gala         # All built-in filters (35+) including resilience and filter algebra
+  extractor.gala      # Type-safe extractors (PathParam, QueryRequired, BodyAs, etc.)
+  sse.gala            # Server-Sent Events (SSEEvent, SSE, SSEStream)
   group.gala          # Route groups with scoped filters
-  server.gala         # Server builder and listener
+  server.gala         # Server builder, TLS, health/readiness, warmup, error mapper
   router.gala         # Route type and registration
-  httpcore/            # Go bridge (~400 lines) — the only Go code
-    httpcore.go        # BridgeRequest, BridgeResponse, ServerBuilder
+  httpcore/            # Go bridge (~500 lines) — the only Go code
+    httpcore.go        # BridgeRequest, BridgeResponse, ServerBuilder, CircuitBreaker, Semaphore
     testing.go         # TestRequestBuilder for unit tests
   server_test.gala     # Server, response, request unit tests
   filter_test.gala     # Filter behavior tests
@@ -87,11 +188,12 @@ gala-server/
 +---------------------------------------------+
 |              GALA Server Layer               |
 |  types, request, response, filter, group,   |
-|  server, router  (all .gala)                |
+|  server, router, extractor, sse  (all .gala) |
 +---------------------------------------------+
 |           httpcore Bridge (Go)               |
 |  BridgeRequest, BridgeResponse,             |
-|  ServerBuilder, TokenBucket, HMACSigner     |
+|  ServerBuilder, CircuitBreaker, Semaphore,   |
+|  TokenBucket, HMACSigner, ETag              |
 +---------------------------------------------+
 |              Go net/http                     |
 +---------------------------------------------+
@@ -101,11 +203,11 @@ The GALA layer is purely functional and immutable. The httpcore bridge is a thin
 
 ## Documentation
 
-- [Getting Started](docs/getting-started.md) — installation, core concepts, first server
-- [API Reference](docs/api-reference.md) — complete reference for all types, responses, request API, filters
-- [Filters](docs/filters.md) — middleware system: three scopes, execution order, built-in filters, custom filters
-- [Route Groups](docs/groups.md) — grouping routes with shared prefixes and scoped filters
-- [Transpiler Notes](TRANSPILER_NOTES.md) — known transpiler issues and workarounds for gala-server development
+- [Getting Started](docs/getting-started.md) -- installation, core concepts, first server
+- [API Reference](docs/api-reference.md) -- complete reference for all types, responses, request API, filters
+- [Filters](docs/filters.md) -- filter system: three scopes, execution order, built-in filters, filter algebra, resilience
+- [Route Groups](docs/groups.md) -- grouping routes with shared prefixes and scoped filters
+- [Transpiler Notes](TRANSPILER_NOTES.md) -- known transpiler issues and workarounds for gala-server development
 
 ## Test Coverage
 

@@ -17,10 +17,10 @@ Complete reference for gala-server types, functions, and filters.
 | `Forbidden(body)` | 403 | Access denied |
 | `NotFound(body)` | 404 | Resource not found |
 | `MethodNotAllowed()` | 405 | Method not allowed |
+| `RequestTimeout()` | 408 | Timeout |
 | `Conflict(body)` | 409 | Conflict |
 | `UnprocessableEntity(body)` | 422 | Unprocessable |
 | `TooManyRequests(body)` | 429 | Rate limited |
-| `RequestTimeout()` | 408 | Timeout |
 | `InternalError(body)` | 500 | Server error |
 | `BadGateway(body)` | 502 | Bad gateway |
 | `ServiceUnavailable(body)` | 503 | Unavailable |
@@ -40,6 +40,25 @@ Complete reference for gala-server types, functions, and filters.
 | `Inline(path, name)` | auto-detect | File inline |
 | `Stream(status, ct, body)` | custom | Streaming response |
 | `String(status, body)` | text/plain | Text with custom status |
+
+### Content Negotiation
+
+`Negotiate` selects a response format based on the request's `Accept` header:
+
+```gala
+func Negotiate(req Request, json func() Response, html func() Response, fallback func() Response) Response
+```
+
+Example:
+
+```gala
+func handler(req Request) Response =
+    Negotiate(req,
+        () => JsonResponse("{\"msg\": \"hello\"}"),
+        () => Html("<p>hello</p>"),
+        () => Text("hello"),
+    )
+```
 
 ### JSON Serialization (zero-reflection)
 
@@ -82,9 +101,73 @@ resp.WithCookie(cookie)
 ### Cookie Helpers
 
 ```gala
-resp.SetCookie("name", "value", "/", 3600)
-resp.SetSecureCookie("name", "value", "/", 3600)
+resp.SetCookie("name", "value")
+resp.SetSecureCookie("name", "value", 3600)
 resp.DeleteCookie("name")
+```
+
+## Sealed Types
+
+### Method
+
+```gala
+sealed type Method {
+    case GET()
+    case POST()
+    case PUT()
+    case DELETE()
+    case PATCH()
+    case HEAD()
+    case OPTIONS()
+    case CUSTOM(MethodName string)
+}
+```
+
+The `CUSTOM(MethodName)` case handles non-standard HTTP methods. `Method.Name()` returns the method string. The `toMethod` parser returns `CUSTOM(s)` for unrecognized method strings.
+
+### StatusCode
+
+```gala
+sealed type StatusCode {
+    case StatusOk()                  // 200
+    case StatusCreated()             // 201
+    case StatusAccepted()            // 202
+    case StatusNoContent()           // 204
+    case StatusBadRequest()          // 400
+    case StatusUnauthorized()        // 401
+    case StatusForbidden()           // 403
+    case StatusNotFound()            // 404
+    case StatusMethodNotAllowed()    // 405
+    case StatusRequestTimeout()      // 408
+    case StatusConflict()            // 409
+    case StatusUnprocessableEntity() // 422
+    case StatusTooManyRequests()     // 429
+    case StatusInternalError()       // 500
+    case StatusBadGateway()          // 502
+    case StatusServiceUnavailable()  // 503
+    case StatusCustom(Value int)
+}
+```
+
+`StatusCode.Code()` returns the numeric HTTP status code.
+
+### ErrorMapper
+
+```gala
+type ErrorMapper func(error) Option[Response]
+```
+
+Converts specific error types to HTTP responses. Returns `Some(response)` if the error is handled, `None` otherwise. Register with `WithErrorMapper`:
+
+```gala
+val mapper ErrorMapper = (err) => {
+    if errors.Is(err, ErrNotFound) {
+        return Some(NotFound("resource not found"))
+    }
+    return None[Response]()
+}
+
+server.WithErrorMapper(mapper)
 ```
 
 ## Request API
@@ -115,20 +198,49 @@ req.ContentType()                  // Option[string]
 req.Cookie("session")              // Option[string]
 ```
 
+### Content Negotiation
+
+```gala
+req.Accepts("application/json")   // bool — checks Accept header
+req.AcceptsJSON()                  // bool — shorthand for application/json
+req.AcceptsHTML()                  // bool — shorthand for text/html
+req.AcceptsXML()                   // bool — shorthand for application/xml
+```
+
+These check whether the request's `Accept` header contains the given content type (or `*/*`).
+
+### Context Propagation
+
+```gala
+req.Deadline()       // Option[time.Time] — Go context deadline, if set
+req.IsCancelled()    // bool — true if Go context is cancelled/timed out
+```
+
+Use these to respect client-side timeouts and cancellation:
+
+```gala
+func handler(req Request) Response {
+    if req.IsCancelled() {
+        return RequestTimeout()
+    }
+    // ... do work
+    return Ok("done")
+}
+```
+
 ### Body & Form
 
 ```gala
 req.Body()                         // string
 req.FormValue("username")          // Option[string]
 req.FormParams("tags")             // Array[string]
-req.FormFile("avatar")             // ([]byte, string, error)
 BindJson[T](req, codec)           // Try[T]
 ```
 
 ### Connection Info
 
 ```gala
-req.Method()       // Method (sealed type: GET(), POST(), etc.)
+req.Method()       // Method (sealed type: GET(), POST(), CUSTOM("PURGE"), etc.)
 req.Path()         // string
 req.Host()         // string
 req.Scheme()       // "http" or "https"
@@ -155,6 +267,74 @@ Used internally by filters like MethodOverride and Decompress:
 ```gala
 req.WithMethod("PUT")       // Request with overridden method
 req.WithBody("new body")    // Request with replaced body
+```
+
+## Type-Safe Extractors
+
+Extractors provide a `Try`-based API for extracting values from requests. They return `Try[T]` for clean error handling via pattern matching.
+
+### PathParam / PathParamInt
+
+```gala
+PathParam(req, "id")      // Try[string] — Failure if missing
+PathParamInt(req, "id")   // Try[int] — Failure if missing or not an integer
+```
+
+### QueryRequired / QueryInt
+
+```gala
+QueryRequired(req, "q")       // Try[string] — Failure if missing
+QueryInt(req, "page", 1)      // int — returns default if missing or invalid
+```
+
+### HeaderRequired
+
+```gala
+HeaderRequired(req, "X-Api-Key")   // Try[string] — Failure if missing
+```
+
+### BodyAs[T]
+
+```gala
+BodyAs[User](req, userCodec)   // Try[User] — Failure if body cannot be parsed
+```
+
+### Example
+
+```gala
+func getUser(req Request) Response =
+    PathParamInt(req, "id") match {
+        case Success(id) => Ok(s"User $id")
+        case Failure(err) => BadRequest(s"Invalid ID: $err")
+    }
+```
+
+## Server-Sent Events (SSE)
+
+### SSEEvent
+
+```gala
+struct SSEEvent(Event string, Data string, Id string, Retry int)
+```
+
+### SSE
+
+Creates an SSE response from an array of events. Sets `Content-Type: text/event-stream` with `Cache-Control: no-cache` and `Connection: keep-alive`.
+
+```gala
+val events = ArrayOf(
+    SSEEvent(Event = "message", Data = "Hello!", Id = "1", Retry = 0),
+    SSEEvent(Event = "update", Data = "{\"count\": 42}", Id = "2", Retry = 0),
+)
+return SSE(events)
+```
+
+### SSEStream
+
+Convenience for streaming a single event:
+
+```gala
+return SSEStream("message", "Hello!")
 ```
 
 ## HTTPError
@@ -192,13 +372,65 @@ err.ToJsonResponse() // JSON Response: {"error": "...", "code": 404}
 NewServer().
     WithPort(8080).
     WithName("My API").
+    WithBasePath("/api/v1").
     WithDebug(true).
     WithBanner(false).
     WithShutdownTimeout(10 * time.Second).
     WithErrorHandler((err) => InternalError(err.Error())).
     WithNotFound((req) => NotFound("page not found")).
+    WithErrorMapper(myMapper).
+    WithWarmup(() => initCaches()).
     WithRenderer(myRenderer).
     WithValidator(myValidator)
+```
+
+### BasePath
+
+`WithBasePath` sets a prefix for all registered routes:
+
+```gala
+val server = NewServer().
+    WithBasePath("/api/v1").
+    GET("/users", listUsers).        // matches /api/v1/users
+    GET("/users/{id}", getUser)      // matches /api/v1/users/{id}
+```
+
+### Error Mapping
+
+`WithErrorMapper` registers a function that converts domain errors to HTTP responses before the default error handler runs:
+
+```gala
+type ErrorMapper func(error) Option[Response]
+
+val mapper ErrorMapper = (err) => {
+    if errors.Is(err, ErrNotFound) {
+        return Some(NotFound("not found"))
+    }
+    return None[Response]()
+}
+
+server.WithErrorMapper(mapper)
+```
+
+### Warmup
+
+`WithWarmup` registers a function that runs before the server starts accepting traffic:
+
+```gala
+server.WithWarmup(() => {
+    loadCaches()
+    warmConnectionPools()
+})
+```
+
+### Health Check & Readiness
+
+```gala
+// Simple health check — returns 200 "OK"
+server.WithHealthCheck("/health")
+
+// Readiness with custom check — returns 200 "READY" or 503 "NOT READY"
+server.WithReadiness("/ready", () => dbPool.IsConnected())
 ```
 
 ### Route Naming & URL Generation
@@ -223,12 +455,25 @@ type Renderer interface { Render(name string, data any) string }
 type Validator interface { Validate(i any) error }
 ```
 
-### Listening
+### Listening (HTTP)
 
 ```gala
-server.Listen(":8080")          // Start server
-server.ListenGraceful()         // Start with graceful shutdown
+server.Listen()                    // Start on configured port (default 8080)
+server.ListenOn(":9090")           // Start on explicit address
+server.ListenGraceful()            // Start with graceful shutdown
+server.ListenGracefulOn(":9090")   // Graceful on explicit address
 ```
+
+### Listening (TLS/HTTPS)
+
+```gala
+server.ListenTLS("cert.pem", "key.pem")                   // HTTPS on configured port
+server.ListenTLSOn(":443", "cert.pem", "key.pem")         // HTTPS on explicit address
+server.ListenGracefulTLS("cert.pem", "key.pem")            // HTTPS + graceful shutdown
+server.ListenGracefulTLSOn(":443", "cert.pem", "key.pem") // HTTPS + graceful on address
+```
+
+All TLS methods accept a certificate file and private key file path. They print a banner indicating HTTPS mode.
 
 ## Filters (Middleware)
 
@@ -328,6 +573,71 @@ NonWWWRedirect()       // Redirect www to non-www
 Rewrite(rules)         // URL path rewriting with wildcard matching
 ```
 
+### Filter Algebra
+
+Compose and conditionally apply filters:
+
+```gala
+// Compose two filters sequentially (outer wraps inner)
+ComposeFilters(outer, inner)
+
+// Conditional: apply filter only when predicate returns true
+When((req) => req.Path() != "/health", Auth())
+
+// Skip filter for specific paths
+Skip(Logger(), "/health", "/ready", "/metrics")
+
+// Sugar for passing multiple filters as an Array
+Use(Logger(), Recovery(), Cors())
+```
+
+### ETag / Cache-Control
+
+```gala
+ETag()                 // Auto-generate ETags from response body hash; returns 304 on If-None-Match match
+CacheControl(3600)     // Set Cache-Control: public, max-age=3600
+NoCacheFilter()        // Set Cache-Control: no-cache, no-store, must-revalidate + Pragma + Expires
+```
+
+### Circuit Breaker
+
+```gala
+CircuitBreaker(
+    maxFailures = 5,                    // failures before circuit opens
+    resetTimeout = 30 * time.Second,    // time before trying half-open
+    halfOpenMax = 1,                    // requests allowed in half-open state
+)
+```
+
+Three states:
+- **Closed** -- normal operation, requests pass through
+- **Open** -- after `maxFailures` consecutive failures, all requests rejected with 503
+- **Half-Open** -- after `resetTimeout`, allows `halfOpenMax` probe requests; success closes the circuit, failure re-opens it
+
+### Retry / RetryWithBackoff
+
+```gala
+// Fixed backoff between retries
+Retry(maxRetries = 3, backoff = 100 * time.Millisecond)
+
+// Exponential backoff: doubles each attempt, capped at maxBackoff
+RetryWithBackoff(
+    maxRetries = 3,
+    initialBackoff = 100 * time.Millisecond,
+    maxBackoff = 5 * time.Second,
+)
+```
+
+Retries on 5xx responses or handler failures. Returns the last response/error after all retries are exhausted.
+
+### Bulkhead (Concurrency Limiter)
+
+```gala
+Bulkhead(maxConcurrent = 100)
+```
+
+Limits the number of concurrent in-flight requests using a semaphore. When at capacity, immediately returns 503 Service Unavailable. Releases the semaphore slot when the handler completes (success or failure).
+
 ## Architecture
 
 ```
@@ -335,12 +645,13 @@ Rewrite(rules)         // URL path rewriting with wildcard matching
 |              GALA Server Layer               |
 |  (server.gala, request.gala, response.gala,  |
 |   filter.gala, group.gala, router.gala,      |
-|   types.gala)                                |
+|   types.gala, extractor.gala, sse.gala)      |
 +---------------------------------------------+
 |           httpcore Bridge (Go)              |
-|  (~400 lines - the ONLY Go code)            |
+|  (~500 lines - the ONLY Go code)            |
 |  BridgeRequest, BridgeResponse,             |
-|  ServerBuilder, TokenBucket, HMACSigner     |
+|  ServerBuilder, CircuitBreaker, Semaphore,   |
+|  TokenBucket, HMACSigner, ETag              |
 +---------------------------------------------+
 |              Go net/http                     |
 +---------------------------------------------+
