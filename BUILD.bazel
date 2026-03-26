@@ -1,6 +1,5 @@
-load("@gala//:gala.bzl", "gala_go_test", "gala_transpile")
+load("@gala//:gala.bzl", "gala_go_test", "gala_library")
 load("@gazelle//:def.bzl", "gazelle")
-load("@rules_go//go:def.bzl", "go_library")
 
 exports_files(
     ["go.mod"],
@@ -24,56 +23,22 @@ gazelle(
 
 # --- GALA Server Library ---
 
-_GALA_SRCS = [
-    "types.gala",
-    "request.gala",
-    "response.gala",
-    "group.gala",
-    "server.gala",
-    "router.gala",
-    "filter.gala",
-    "extractor.gala",
-    "sse.gala",
-]
-
-filegroup(
-    name = "gala_sources",
-    srcs = glob(
-        ["*.gala"],
-        exclude = ["*_test.gala"],
-    ),
-    visibility = ["//visibility:public"],
+_GALA_SRCS = glob(
+    ["*.gala"],
+    exclude = ["*_test.gala"],
 )
 
-# Convention name for gala_deps resolution
-filegroup(
-    name = "gala-server_gala_sources",
-    srcs = [":gala_sources"],
-    visibility = ["//visibility:public"],
-)
-
-# Transpile each GALA file with package_files for cross-file type resolution
-[gala_transpile(
-    name = src.replace(".gala", "_go"),
-    src = src,
-    out = src.replace(".gala", ".gen.go"),
-    package_files = [s for s in _GALA_SRCS if s != src],
-) for src in _GALA_SRCS]
-
-# Go library from transpiled GALA sources
-go_library(
+gala_library(
     name = "gala-server",
-    srcs = [src.replace(".gala", ".gen.go") for src in _GALA_SRCS],
+    srcs = _GALA_SRCS,
     importpath = "github.com/martianoff/gala-server",
-    visibility = ["//visibility:public"],
     deps = [
         "//httpcore",
-        "@gala//collection_immutable",
-        "@gala//concurrent",
-        "@gala//json",
-        "@gala//std",
     ],
+    visibility = ["//visibility:public"],
 )
+
+# --- Tests ---
 
 _TEST_DEPS = [
     "//httpcore",
@@ -109,15 +74,15 @@ gala_go_test(
 gala_go_test(
     name = "extractor_test",
     srcs = ["extractor_test.gala"],
-    gala_deps = [
-        "//:gala-server",
-    ],
+    pkg = "server",
+    lib_srcs = _GALA_SRCS,
+    deps = _TEST_DEPS,
 )
 
 gala_go_test(
     name = "sse_test",
     srcs = ["sse_test.gala"],
-    gala_deps = [
-        "//:gala-server",
-    ],
+    pkg = "server",
+    lib_srcs = _GALA_SRCS,
+    deps = _TEST_DEPS,
 )
