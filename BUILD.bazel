@@ -32,6 +32,8 @@ _GALA_SRCS = [
     "server.gala",
     "router.gala",
     "filter.gala",
+    "extractor.gala",
+    "sse.gala",
 ]
 
 filegroup(
@@ -102,4 +104,20 @@ gala_go_test(
     pkg = "server",
     lib_srcs = _GALA_SRCS,
     deps = _TEST_DEPS,
+)
+
+gala_go_test(
+    name = "extractor_test",
+    srcs = ["extractor_test.gala"],
+    gala_deps = [
+        "//:gala-server",
+    ],
+)
+
+gala_go_test(
+    name = "sse_test",
+    srcs = ["sse_test.gala"],
+    gala_deps = [
+        "//:gala-server",
+    ],
 )
