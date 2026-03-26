@@ -576,3 +576,196 @@ func Rewrite(rules Array[Tuple[string, string]]) Filter =
         }
         return next(req)
     }
+
+// ========================
+// Filter Algebra
+// ========================
+
+// ComposeFilters composes two filters sequentially (outer wraps inner).
+// The outer filter runs first, then delegates to the inner filter which wraps the handler.
+func ComposeFilters(outer Filter, inner Filter) Filter =
+    (req Request, next Handler) => {
+        val innerHandler = (r Request) => inner(r, next)
+        return outer(req, innerHandler)
+    }
+
+// When returns a conditional filter that only applies when the predicate is true.
+// If the predicate returns false, the handler is called directly without the filter.
+func When(predicate func(Request) bool, filter Filter) Filter =
+    (req Request, next Handler) => {
+        if predicate(req) {
+            return filter(req, next)
+        }
+        return next(req)
+    }
+
+// Skip returns a filter that skips applying itself for the given paths.
+// Useful for excluding health check or metrics endpoints from logging/auth.
+func Skip(filter Filter, paths ...string) Filter {
+    val skipPaths = ArrayOf(paths...)
+    return (req Request, next Handler) => {
+        val path = req.Path()
+        val shouldSkip = skipPaths.Exists((p) => p == path)
+        if shouldSkip {
+            return next(req)
+        }
+        return filter(req, next)
+    }
+}
+
+// Use returns the given filters as an Array, providing sugar for passing multiple filters.
+func Use(filters ...Filter) Array[Filter] = ArrayOf(filters...)
+
+// ========================
+// ETag Filter
+// ========================
+
+// ETag returns a filter that generates ETags from response body hashes.
+// Supports conditional requests with If-None-Match — returns 304 Not Modified
+// when the client already has the current version.
+func ETag() Filter =
+    (req Request, next Handler) => next(req).Map((resp) => {
+        if resp.Body == "" {
+            return resp
+        }
+        val etag = httpcore.ComputeETag(resp.Body)
+        val clientETag = req.Header("If-None-Match").GetOrElse("")
+        if clientETag == etag {
+            return NewResponse(StatusCustom(304)).WithHeader("ETag", etag)
+        }
+        return resp.WithHeader("ETag", etag)
+    })
+
+// ========================
+// Cache-Control Filters
+// ========================
+
+// CacheControl returns a filter that sets Cache-Control headers on responses.
+// maxAge is in seconds.
+func CacheControl(maxAge int) Filter =
+    (req Request, next Handler) => next(req).Map((resp) =>
+        resp.WithHeader("Cache-Control", s"public, max-age=$maxAge"))
+
+// NoCacheFilter returns a filter that sets no-cache headers on responses.
+func NoCacheFilter() Filter =
+    (req Request, next Handler) => next(req).Map((resp) =>
+        resp.WithHeader("Cache-Control", "no-cache, no-store, must-revalidate").
+            WithHeader("Pragma", "no-cache").
+            WithHeader("Expires", "0"))
+
+// ========================
+// Circuit Breaker Filter
+// ========================
+
+// CircuitBreaker returns a filter that implements the circuit breaker pattern.
+// When failures exceed maxFailures, the circuit opens and rejects requests
+// with 503 Service Unavailable for resetTimeout duration.
+// After the timeout, halfOpenMax requests are allowed through to test recovery.
+func CircuitBreaker(
+    maxFailures int = 5,
+    resetTimeout time.Duration = 30 * time.Second,
+    halfOpenMax int = 1,
+) Filter {
+    val cb = httpcore.NewCircuitBreaker(maxFailures, resetTimeout, halfOpenMax)
+    return (req Request, next Handler) => {
+        if !cb.Allow() {
+            return FutureOf(ServiceUnavailable("Circuit breaker open"))
+        }
+        return next(req).Map((resp) => {
+            if resp.Code() >= 500 {
+                cb.RecordFailure()
+            } else {
+                cb.RecordSuccess()
+            }
+            return resp
+        }).Recover((err) => {
+            cb.RecordFailure()
+            return InternalError(s"Service error: $err")
+        })
+    }
+}
+
+// ========================
+// Retry Filter
+// ========================
+
+// Retry returns a filter that retries failed requests up to maxRetries times
+// with a fixed backoff duration between attempts.
+func Retry(maxRetries int = 3, backoff time.Duration = 100 * time.Millisecond) Filter =
+    (req Request, next Handler) => FutureApply[Response](() => {
+        var lastResp = InternalError("Request failed: no attempts made")
+        var attempts = 0
+        for attempts <= maxRetries {
+            val result = next(req).Await()
+            val shouldRetry = result match {
+                case Success(resp) =>
+                    lastResp = resp
+                    return resp.Code() >= 500 && attempts < maxRetries
+                case Failure(err) =>
+                    lastResp = InternalError(s"Request failed: $err")
+                    return attempts < maxRetries
+            }
+            if !shouldRetry {
+                return lastResp
+            }
+            time.Sleep(backoff)
+            attempts = attempts + 1
+        }
+        return lastResp
+    })
+
+// RetryWithBackoff returns a filter that retries with exponential backoff.
+// The backoff duration doubles after each attempt, capped at maxBackoff.
+func RetryWithBackoff(
+    maxRetries int = 3,
+    initialBackoff time.Duration = 100 * time.Millisecond,
+    maxBackoff time.Duration = 5 * time.Second,
+) Filter =
+    (req Request, next Handler) => FutureApply[Response](() => {
+        var lastResp = InternalError("Request failed: no attempts made")
+        var attempts = 0
+        var currentBackoff = initialBackoff
+        for attempts <= maxRetries {
+            val result = next(req).Await()
+            val shouldRetry = result match {
+                case Success(resp) =>
+                    lastResp = resp
+                    return resp.Code() >= 500 && attempts < maxRetries
+                case Failure(err) =>
+                    lastResp = InternalError(s"Request failed: $err")
+                    return attempts < maxRetries
+            }
+            if !shouldRetry {
+                return lastResp
+            }
+            time.Sleep(currentBackoff)
+            currentBackoff = currentBackoff * 2
+            if currentBackoff > maxBackoff {
+                currentBackoff = maxBackoff
+            }
+            attempts = attempts + 1
+        }
+        return lastResp
+    })
+
+// ========================
+// Bulkhead (Concurrency Limiter) Filter
+// ========================
+
+// Bulkhead returns a filter that limits the number of concurrent requests.
+// When at capacity, returns 503 Service Unavailable.
+func Bulkhead(maxConcurrent int = 100) Filter {
+    val sem = httpcore.NewSemaphore(maxConcurrent)
+    return (req Request, next Handler) => {
+        if !sem.TryAcquire() {
+            return FutureOf(ServiceUnavailable("Too many concurrent requests"))
+        }
+        return next(req).Map((resp) => {
+            sem.Release()
+            return resp
+        }).Recover((err) => {
+            sem.Release()
+            return InternalError(s"Service error: $err")
+        })
+    }
+}

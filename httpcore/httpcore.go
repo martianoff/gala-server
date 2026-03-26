@@ -54,6 +54,8 @@ type BridgeRequest struct {
 	scheme     string
 	ctxValues  *ContextValues
 	isTLS      bool
+	ctxDeadline func() (time.Time, bool)
+	ctxDone     func() bool
 }
 
 func (r BridgeRequest) PathValue(name string) string {
@@ -124,6 +126,22 @@ func (r BridgeRequest) Host() string       { return r.host }
 func (r BridgeRequest) Scheme() string     { return r.scheme }
 func (r BridgeRequest) IsTLS() bool        { return r.isTLS }
 func (r BridgeRequest) CtxValues() *ContextValues { return r.ctxValues }
+
+// ContextDeadline returns the Go context deadline if set.
+func (r BridgeRequest) ContextDeadline() (time.Time, bool) {
+	if r.ctxDeadline == nil {
+		return time.Time{}, false
+	}
+	return r.ctxDeadline()
+}
+
+// ContextDone returns true if the Go context has been cancelled.
+func (r BridgeRequest) ContextDone() bool {
+	if r.ctxDone == nil {
+		return false
+	}
+	return r.ctxDone()
+}
 
 // RealIP extracts the real client IP considering proxy headers.
 func (r BridgeRequest) RealIP() string {
@@ -233,6 +251,54 @@ func (r *BridgeResponse) AddCookie(c BridgeCookie) {
 
 func (r *BridgeResponse) Headers() map[string]string {
 	return r.headers
+}
+
+// ============================================================================
+// SSE (Server-Sent Events) Response
+// ============================================================================
+
+// SSEEvent represents a single Server-Sent Event.
+type SSEEvent struct {
+	Event string
+	Data  string
+	Id    string
+	Retry int
+}
+
+// NewSSEResponse formats an array of SSE events into a proper text/event-stream response.
+func NewSSEResponse(events []SSEEvent) *BridgeResponse {
+	var sb strings.Builder
+	for _, e := range events {
+		if e.Event != "" {
+			sb.WriteString("event: ")
+			sb.WriteString(e.Event)
+			sb.WriteString("\n")
+		}
+		if e.Id != "" {
+			sb.WriteString("id: ")
+			sb.WriteString(e.Id)
+			sb.WriteString("\n")
+		}
+		if e.Retry > 0 {
+			sb.WriteString("retry: ")
+			sb.WriteString(strconv.Itoa(e.Retry))
+			sb.WriteString("\n")
+		}
+		// Data can be multi-line; each line must be prefixed with "data: "
+		lines := strings.Split(e.Data, "\n")
+		for _, line := range lines {
+			sb.WriteString("data: ")
+			sb.WriteString(line)
+			sb.WriteString("\n")
+		}
+		sb.WriteString("\n") // blank line separates events
+	}
+
+	resp := NewBridgeResponse(200, sb.String())
+	resp.SetHeader("Content-Type", "text/event-stream")
+	resp.SetHeader("Cache-Control", "no-cache")
+	resp.SetHeader("Connection", "keep-alive")
+	return resp
 }
 
 // ============================================================================
@@ -389,6 +455,17 @@ func (sb *ServerBuilder) makeHTTPHandler(h BridgeHandler) http.HandlerFunc {
 			scheme:     scheme,
 			isTLS:      req.TLS != nil,
 			ctxValues:  ctxValues,
+			ctxDeadline: func() (time.Time, bool) {
+				return req.Context().Deadline()
+			},
+			ctxDone: func() bool {
+				select {
+				case <-req.Context().Done():
+					return true
+				default:
+					return false
+				}
+			},
 		}
 
 		resp := h(br)
@@ -426,6 +503,40 @@ func (sb *ServerBuilder) ListenAndServeGraceful(addr string, shutdownTimeout tim
 	errCh := make(chan error, 1)
 	go func() {
 		if err := sb.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			errCh <- err
+		}
+		close(errCh)
+	}()
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+
+	select {
+	case err := <-errCh:
+		return err
+	case <-sigCh:
+		fmt.Println("\nShutdown signal received, draining connections...")
+		ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+		defer cancel()
+		return sb.server.Shutdown(ctx)
+	}
+}
+
+// ListenAndServeTLS starts the HTTPS server with TLS on the given address.
+func (sb *ServerBuilder) ListenAndServeTLS(addr, certFile, keyFile string) error {
+	mux := sb.buildMux()
+	sb.server = &http.Server{Addr: addr, Handler: mux}
+	return sb.server.ListenAndServeTLS(certFile, keyFile)
+}
+
+// ListenAndServeTLSGraceful starts the HTTPS server with TLS and graceful shutdown.
+func (sb *ServerBuilder) ListenAndServeTLSGraceful(addr, certFile, keyFile string, shutdownTimeout time.Duration) error {
+	mux := sb.buildMux()
+	sb.server = &http.Server{Addr: addr, Handler: mux}
+
+	errCh := make(chan error, 1)
+	go func() {
+		if err := sb.server.ListenAndServeTLS(certFile, keyFile); err != nil && err != http.ErrServerClosed {
 			errCh <- err
 		}
 		close(errCh)
@@ -489,6 +600,8 @@ func CloneBridgeRequestWithMethod(br BridgeRequest, method string) BridgeRequest
 		scheme:     br.scheme,
 		ctxValues:  br.ctxValues,
 		isTLS:      br.isTLS,
+		ctxDeadline: br.ctxDeadline,
+		ctxDone:     br.ctxDone,
 	}
 }
 
@@ -513,6 +626,8 @@ func CloneBridgeRequestWithBody(br BridgeRequest, body string) BridgeRequest {
 		scheme:     br.scheme,
 		ctxValues:  br.ctxValues,
 		isTLS:      br.isTLS,
+		ctxDeadline: br.ctxDeadline,
+		ctxDone:     br.ctxDone,
 	}
 }
 
@@ -1181,4 +1296,142 @@ func parseJSONClaims(json string) *JWTClaims {
 	}
 
 	return claims
+}
+
+// ============================================================================
+// Circuit Breaker (state machine for resilience)
+// ============================================================================
+
+// CircuitBreakerState represents the circuit breaker's current state.
+type CircuitBreakerState int
+
+const (
+	CircuitClosed   CircuitBreakerState = iota // normal operation
+	CircuitOpen                                // rejecting requests
+	CircuitHalfOpen                            // testing recovery
+)
+
+// CircuitBreaker implements a circuit breaker pattern with atomic state management.
+type CircuitBreaker struct {
+	mu            sync.Mutex
+	state         CircuitBreakerState
+	failures      int
+	maxFailures   int
+	resetTimeout  time.Duration
+	halfOpenMax   int
+	halfOpenCount int
+	lastFailure   time.Time
+}
+
+// NewCircuitBreaker creates a new circuit breaker with the given configuration.
+func NewCircuitBreaker(maxFailures int, resetTimeout time.Duration, halfOpenMax int) *CircuitBreaker {
+	return &CircuitBreaker{
+		state:        CircuitClosed,
+		maxFailures:  maxFailures,
+		resetTimeout: resetTimeout,
+		halfOpenMax:  halfOpenMax,
+	}
+}
+
+// Allow checks if a request should be allowed through the circuit breaker.
+// Returns true if the request is allowed, false if the circuit is open.
+func (cb *CircuitBreaker) Allow() bool {
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+
+	switch cb.state {
+	case CircuitClosed:
+		return true
+	case CircuitOpen:
+		// Check if reset timeout has elapsed
+		if time.Since(cb.lastFailure) >= cb.resetTimeout {
+			cb.state = CircuitHalfOpen
+			cb.halfOpenCount = 0
+			return true
+		}
+		return false
+	case CircuitHalfOpen:
+		if cb.halfOpenCount < cb.halfOpenMax {
+			cb.halfOpenCount++
+			return true
+		}
+		return false
+	}
+	return false
+}
+
+// RecordSuccess records a successful request, potentially closing the circuit.
+func (cb *CircuitBreaker) RecordSuccess() {
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+
+	if cb.state == CircuitHalfOpen {
+		cb.state = CircuitClosed
+		cb.failures = 0
+		cb.halfOpenCount = 0
+	} else if cb.state == CircuitClosed {
+		cb.failures = 0
+	}
+}
+
+// RecordFailure records a failed request, potentially opening the circuit.
+func (cb *CircuitBreaker) RecordFailure() {
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+
+	cb.failures++
+	cb.lastFailure = time.Now()
+
+	if cb.state == CircuitHalfOpen {
+		cb.state = CircuitOpen
+	} else if cb.state == CircuitClosed && cb.failures >= cb.maxFailures {
+		cb.state = CircuitOpen
+	}
+}
+
+// State returns the current state of the circuit breaker.
+func (cb *CircuitBreaker) State() CircuitBreakerState {
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+	return cb.state
+}
+
+// ============================================================================
+// Bulkhead (Concurrency Limiter via semaphore)
+// ============================================================================
+
+// Semaphore implements a counting semaphore using a buffered channel.
+type Semaphore struct {
+	ch chan struct{}
+}
+
+// NewSemaphore creates a new semaphore with the given capacity.
+func NewSemaphore(maxConcurrent int) *Semaphore {
+	return &Semaphore{ch: make(chan struct{}, maxConcurrent)}
+}
+
+// TryAcquire attempts to acquire a slot without blocking.
+// Returns true if a slot was acquired, false if at capacity.
+func (s *Semaphore) TryAcquire() bool {
+	select {
+	case s.ch <- struct{}{}:
+		return true
+	default:
+		return false
+	}
+}
+
+// Release releases a slot back to the semaphore.
+func (s *Semaphore) Release() {
+	<-s.ch
+}
+
+// ============================================================================
+// ETag Helper
+// ============================================================================
+
+// ComputeETag computes an ETag from the given body using SHA256 truncated to 16 hex chars.
+func ComputeETag(body string) string {
+	h := sha256.Sum256([]byte(body))
+	return `"` + hex.EncodeToString(h[:8]) + `"`
 }

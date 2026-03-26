@@ -5,6 +5,8 @@ import (
     . "martianoff/gala/json"
     . "martianoff/gala/collection_immutable"
     "strconv"
+    "strings"
+    "time"
 )
 
 // Request is a GALA-native immutable HTTP request.
@@ -126,6 +128,37 @@ func (r Request) Header(name string) Option[string] {
 // ContentType returns the Content-Type header value.
 func (r Request) ContentType() Option[string] = r.Header("Content-Type")
 
+// --- Content Negotiation ---
+
+// Accepts returns true if the request's Accept header contains the given content type.
+func (r Request) Accepts(contentType string) bool {
+    val accept = r.Header("Accept").GetOrElse("")
+    return strings.Contains(accept, contentType) || strings.Contains(accept, "*/*")
+}
+
+// AcceptsJSON returns true if the request accepts JSON responses.
+func (r Request) AcceptsJSON() bool = r.Accepts("application/json")
+
+// AcceptsHTML returns true if the request accepts HTML responses.
+func (r Request) AcceptsHTML() bool = r.Accepts("text/html")
+
+// AcceptsXML returns true if the request accepts XML responses.
+func (r Request) AcceptsXML() bool = r.Accepts("application/xml")
+
+// --- Context Propagation ---
+
+// Deadline returns the Go context deadline if set, or None if no deadline.
+func (r Request) Deadline() Option[time.Time] {
+    val t, ok = r.bridge.ContextDeadline()
+    if !ok {
+        return None[time.Time]()
+    }
+    return Some(t)
+}
+
+// IsCancelled returns true if the request's Go context has been cancelled.
+func (r Request) IsCancelled() bool = r.bridge.ContextDone()
+
 // --- Form Data ---
 
 // FormValue returns a form value by name (works for both URL-encoded and multipart).
@@ -225,5 +258,5 @@ func toMethod(s string) Method = s match {
     case "PATCH" => PATCH()
     case "HEAD" => HEAD()
     case "OPTIONS" => OPTIONS()
-    case _ => GET()
+    case _ => CUSTOM(s)
 }

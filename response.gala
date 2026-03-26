@@ -33,25 +33,34 @@ func NewResponse(status StatusCode) Response = Response(
 
 // --- Builder Methods ---
 
+// copy returns a new Response with overridden fields (private, used by builder methods).
+func (r Response) copy(
+    status StatusCode = r.Status,
+    body string = r.Body,
+    bodyBytes Option[Array[byte]] = r.BodyBytes,
+    headers Array[Tuple[string, string]] = r.Headers,
+    cookies Array[Cookie] = r.Cookies,
+) Response = Response(status, body, bodyBytes, headers, cookies)
+
 // WithHeader returns a new Response with an additional header.
 func (r Response) WithHeader(key string, value string) Response =
-    Response(Status = r.Status, Body = r.Body, BodyBytes = r.BodyBytes, Headers = r.Headers.Append((key, value)), Cookies = r.Cookies)
+    r.copy(headers = r.Headers.Append((key, value)))
 
 // WithBody returns a new Response with the given string body.
 func (r Response) WithBody(body string) Response =
-    Response(Status = r.Status, Body = body, BodyBytes = None[Array[byte]](), Headers = r.Headers, Cookies = r.Cookies)
+    r.copy(body = body, bodyBytes = None[Array[byte]]())
 
 // WithBodyBytes returns a new Response with the given binary body.
 func (r Response) WithBodyBytes(body []byte) Response =
-    Response(Status = r.Status, Body = "", BodyBytes = Some(ArrayOf(body...)), Headers = r.Headers, Cookies = r.Cookies)
+    r.copy(body = "", bodyBytes = Some(ArrayOf(body...)))
 
 // WithStatus returns a new Response with the given status code.
 func (r Response) WithStatus(status StatusCode) Response =
-    Response(Status = status, Body = r.Body, BodyBytes = r.BodyBytes, Headers = r.Headers, Cookies = r.Cookies)
+    r.copy(status = status)
 
 // WithCookie returns a new Response with an additional cookie.
 func (r Response) WithCookie(cookie Cookie) Response =
-    Response(Status = r.Status, Body = r.Body, BodyBytes = r.BodyBytes, Headers = r.Headers, Cookies = r.Cookies.Append(cookie))
+    r.copy(cookies = r.Cookies.Append(cookie))
 
 // SetCookie is a convenience for adding a simple name=value cookie.
 func (r Response) SetCookie(name string, value string) Response =
@@ -93,17 +102,17 @@ func MethodNotAllowed() Response = NewResponse(StatusMethodNotAllowed())
 
 func Conflict(body string) Response = NewResponse(StatusConflict()).WithBody(body)
 
-func UnprocessableEntity(body string) Response = NewResponse(StatusCustom(422)).WithBody(body)
+func UnprocessableEntity(body string) Response = NewResponse(StatusUnprocessableEntity()).WithBody(body)
 
 func InternalError(body string) Response = NewResponse(StatusInternalError()).WithBody(body)
 
 func ServiceUnavailable(body string) Response = NewResponse(StatusServiceUnavailable()).WithBody(body)
 
-func TooManyRequests(body string) Response = NewResponse(StatusCustom(429)).WithBody(body)
+func TooManyRequests(body string) Response = NewResponse(StatusTooManyRequests()).WithBody(body)
 
-func RequestTimeout() Response = NewResponse(StatusCustom(408))
+func RequestTimeout() Response = NewResponse(StatusRequestTimeout())
 
-func BadGateway(body string) Response = NewResponse(StatusCustom(502)).WithBody(body)
+func BadGateway(body string) Response = NewResponse(StatusBadGateway()).WithBody(body)
 
 // ============================================================================
 // Content-Type Response Constructors
@@ -132,6 +141,18 @@ func JsonWithStatus(status StatusCode, body string) Response =
 // Blob returns a binary response with the given content type.
 func Blob(status StatusCode, contentType string, data []byte) Response =
     NewResponse(status).WithBodyBytes(data).WithHeader("Content-Type", contentType)
+
+// Negotiate performs content negotiation based on the request's Accept header.
+// Calls the appropriate response builder for JSON, HTML, or falls back to the default.
+func Negotiate(req Request, json func() Response, html func() Response, fallback func() Response) Response {
+    if req.AcceptsJSON() {
+        return json()
+    }
+    if req.AcceptsHTML() {
+        return html()
+    }
+    return fallback()
+}
 
 // ============================================================================
 // JSON Serialization (zero-reflection, via GALA codec)
