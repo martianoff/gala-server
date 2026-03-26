@@ -7,7 +7,7 @@ on:
     branches: [master]
 
 jobs:
-  test:
+  build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -16,6 +16,9 @@ jobs:
         run: |
           curl -fsSL https://gala-lang.dev/install.sh | bash
           echo "$HOME/.gala/bin" >> $GITHUB_PATH
+
+      - name: Regenerate go.mod for this environment
+        run: gala mod tidy
 
       - name: Setup Bazel
         uses: bazel-contrib/setup-bazel@0.14.0
