@@ -979,8 +979,7 @@ func TestWithReadinessMultiple(t T) T {
 // ============================================================================
 
 func TestWithWarmup(t T) T {
-    var warmedUp = false
-    val s = NewServer().WithWarmup(() => { warmedUp = true })
+    val s = NewServer().WithWarmup(() => {})
     // Warmup is set but not yet called (called at Listen time)
     return IsTrue(t, s.warmup.IsDefined())
 }

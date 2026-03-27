@@ -30,7 +30,7 @@ type Server struct {
     renderer        Option[Renderer]
     validator       Option[Validator]
     errorMapper     Option[ErrorMapper]
-    warmup          Option[func()]
+    warmup          Option[WarmupFunc]
 }
 
 // NewServer creates an empty Server with default settings (port 8080).
@@ -48,7 +48,7 @@ func NewServer() Server = Server(
     renderer = None[Renderer](),
     validator = None[Validator](),
     errorMapper = None[ErrorMapper](),
-    warmup = None[func()](),
+    warmup = None[WarmupFunc](),
 )
 
 func defaultErrorHandler(err error) Response =
@@ -73,7 +73,7 @@ func (s Server) copy(
     rndr Option[Renderer] = s.renderer,
     vldr Option[Validator] = s.validator,
     errMapper Option[ErrorMapper] = s.errorMapper,
-    wu Option[func()] = s.warmup,
+    wu Option[WarmupFunc] = s.warmup,
 ) Server = Server(root, port, name, basePath, errHandler, notFound, statics, timeout, debug, banner, rndr, vldr, errMapper, wu)
 
 // WithPort sets the port the server listens on.
@@ -309,9 +309,8 @@ func (s Server) ListenGracefulTLSOn(addr string, certFile string, keyFile string
 // --- Internal ---
 
 func (s Server) runWarmup() {
-    s.warmup match {
-        case Some(handler) => handler()
-        case None() => {}
+    if s.warmup.IsDefined() {
+        s.warmup.Get()()
     }
 }
 
@@ -358,18 +357,14 @@ func (s Server) printBanner(addr string, graceful bool, tls bool) {
     Println("")
 }
 
+func handleError(err error, errHandler func(error) Response, errMapper Option[ErrorMapper]) Response =
+    errMapper.FlatMap((mapper) => mapper(err)).GetOrElse(errHandler(err))
+
 func makeBridgeHandler(handler Handler, errHandler func(error) Response, errMapper Option[ErrorMapper]) httpcore.BridgeHandler =
     (br httpcore.BridgeRequest) => {
         val req = Request(bridge = br)
         return handler(req).Await() match {
             case Success(resp) => resp.ToBridge()
-            case Failure(err) =>
-                // Try error mapper first, fall back to error handler
-                val mapped = errMapper.FlatMap((mapper) => mapper(err))
-                val resp = mapped match {
-                    case Some(r) => r
-                    case None() => errHandler(err)
-                }
-                return resp.ToBridge()
+            case Failure(err) => handleError(err, errHandler, errMapper).ToBridge()
         }
     }

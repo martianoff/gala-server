@@ -77,6 +77,9 @@ func (s StatusCode) Code() int = s match {
 // Returns Some(response) if the error is handled, None otherwise.
 type ErrorMapper func(error) Option[Response]
 
+// WarmupFunc is a function that runs before the server accepts traffic.
+type WarmupFunc func()
+
 // --- Handler and Filter Types ---
 
 // Handler processes a Request and returns a Future[Response].

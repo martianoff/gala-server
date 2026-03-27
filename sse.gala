@@ -33,7 +33,6 @@ func SSE(events Array[SSEEvent]) Response {
     val br = httpcore.NewSSEResponse(goEvents)
     // Build Response from bridge response
     var resp = NewResponse(StatusOk()).WithBody(br.Body)
-    val headers = br.Headers()
     // Apply SSE headers
     resp = resp.WithHeader("Content-Type", "text/event-stream")
     resp = resp.WithHeader("Cache-Control", "no-cache")

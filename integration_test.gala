@@ -18,7 +18,7 @@ func startTestServer(s Server) string {
 
     s.root.Routes.ForEach((route) => {
         val handler = applyFilters(route.Handler, s.root.Filters)
-        sb.AddRoute(route.Method.Name(), route.Pattern, makeBridgeHandler(handler, s.ErrorHandler))
+        sb.AddRoute(route.Method.Name(), route.Pattern, makeBridgeHandler(handler, s.ErrorHandler, s.errorMapper))
     })
 
     val port = 18900 + testPortCounter.Next()

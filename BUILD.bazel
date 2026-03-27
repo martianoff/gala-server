@@ -34,6 +34,9 @@ gala_library(
     importpath = "github.com/martianoff/gala-server",
     deps = [
         "//httpcore",
+        "@gala//collection_immutable",
+        "@gala//concurrent",
+        "@gala//json",
     ],
     visibility = ["//visibility:public"],
 )
