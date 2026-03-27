@@ -42,7 +42,7 @@ func TestLoggerDoesNotAlterResponse(t T) T {
 
 func TestLoggerWithFormatDoesNotAlterResponse(t T) T {
     val r = mkReq(req("GET", "/test"))
-    val format = (method string, path string, status int, duration _) => s"$method $path $status"
+    val format = (method string, path string, status int, duration time.Duration) => s"$method $path $status"
     val resp = LoggerWithFormat(format)(r, okHandler).Get()
     return Eq(t, resp.Code(), 200)
 }

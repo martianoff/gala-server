@@ -11,16 +11,16 @@ require (
 	martianoff/gala/test v0.0.0
 )
 
-replace martianoff/gala/std => C:/Users/maxmr/.gala/stdlib/v0.20.0/std
+replace martianoff/gala/std => C:/Users/maxmr/.gala/stdlib/vdev/std
 
-replace martianoff/gala/go_interop => C:/Users/maxmr/.gala/stdlib/v0.20.0/go_interop
+replace martianoff/gala/go_interop => C:/Users/maxmr/.gala/stdlib/vdev/go_interop
 
-replace martianoff/gala/collection_immutable => C:/Users/maxmr/.gala/stdlib/v0.20.0/collection_immutable
+replace martianoff/gala/collection_immutable => C:/Users/maxmr/.gala/stdlib/vdev/collection_immutable
 
-replace martianoff/gala/collection_mutable => C:/Users/maxmr/.gala/stdlib/v0.20.0/collection_mutable
+replace martianoff/gala/collection_mutable => C:/Users/maxmr/.gala/stdlib/vdev/collection_mutable
 
-replace martianoff/gala/concurrent => C:/Users/maxmr/.gala/stdlib/v0.20.0/concurrent
+replace martianoff/gala/concurrent => C:/Users/maxmr/.gala/stdlib/vdev/concurrent
 
-replace martianoff/gala/json => C:/Users/maxmr/.gala/stdlib/v0.20.0/json
+replace martianoff/gala/json => C:/Users/maxmr/.gala/stdlib/vdev/json
 
-replace martianoff/gala/test => C:/Users/maxmr/.gala/stdlib/v0.20.0/test
+replace martianoff/gala/test => C:/Users/maxmr/.gala/stdlib/vdev/test

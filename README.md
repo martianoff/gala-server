@@ -28,32 +28,36 @@ func main() {
 
 ## Prerequisites
 
-- [Bazel](https://github.com/bazelbuild/bazelisk) (via Bazelisk)
-- [Go SDK](https://go.dev/dl/) on PATH (for Go type inference during transpilation)
+- [GALA](https://github.com/martianoff/gala) compiler (dev build or v0.21.0+)
+- [Go SDK](https://go.dev/dl/) 1.25+ on PATH
+- [Bazel](https://github.com/bazelbuild/bazelisk) (via Bazelisk) — optional, for Bazel builds
 
 ## Build & Test
 
+### Using GALA CLI (recommended)
+
 ```shell
-# Build everything
-bazel build //...
+# Transpile and compile-check (library)
+gala build
 
+# Transpile and run all 235 tests
+gala test
+```
+
+### Using Bazel
+
+```shell
 # Run all tests
-bazel test //...
-
-# Run tests with verbose output
-bazel test //... --test_output=errors --verbose_failures
+bazel test //:server_test //:filter_test //:integration_test
 
 # Run a specific test target
 bazel test //:server_test
-bazel test //:filter_test
-bazel test //:integration_test
 
-# Regenerate BUILD files after adding/removing .gala files
-bazel run //:gazelle
-
-# Update Go dependencies
-go mod tidy && bazel run //:gazelle && bazel run //:gazelle-update-repos && bazel run //:gazelle && bazel mod tidy
+# Build library only
+bazel build //...
 ```
+
+> **Note:** `MODULE.bazel` uses `local_path_override` pointing to the local GALA checkout (`../gala_simple`). Update the path if your GALA repo is elsewhere.
 
 ## Project Structure
 
@@ -105,4 +109,16 @@ The GALA layer is purely functional and immutable. The httpcore bridge is a thin
 
 ## Test Coverage
 
-235 test functions across 3 test files covering server builder, all 16 response constructors, content-type constructors, blob variants, JSONP, redirects, response builders, cookies, sealed types, request API (params, query, headers, body, form, context, connection info), all 27+ filters (including JWT, Proxy), groups (nesting, composition, filter scoping), HTTPError, route naming/URL generation, JWT token creation/validation, and full HTTP integration tests.
+235 tests across 3 test files — **all passing** via `gala test` and `bazel test`:
+
+- **Server builder**: NewServer, WithPort, WithName, WithDebug, WithBanner, immutability, Any method
+- **Response constructors**: all 16 status codes, content types (JSON, HTML, XML, Text), JSONP, blobs, redirects, streams
+- **Response builder**: WithHeader, WithBody, WithStatus, cookies (set, secure, delete), immutability
+- **Sealed types**: Method (7 variants), StatusCode (13 variants)
+- **Request API**: params, query params, headers, body, form, cookies, context, host, scheme, TLS, RealIP
+- **Filters**: Logger, Recovery, CORS, Auth, AuthBearer, BasicAuth, KeyAuth, RateLimit, RateLimitPerIP, Timeout, Gzip, RequestId, Secure, BodyLimit, CSRF, HTTPSRedirect, WWWRedirect, NonWWWRedirect, TrailingSlash, RemoveTrailingSlash, MethodOverride, BodyDump, Decompress, Rewrite, JWTAuth, Proxy
+- **Groups**: nesting, composition, filter scoping, filter isolation
+- **HTTPError**: structured errors, JSON responses
+- **Route naming**: URL generation with parameter substitution
+- **JWT**: token creation, validation, expiry, claims, signature verification
+- **Integration**: full HTTP request/response cycle with real server

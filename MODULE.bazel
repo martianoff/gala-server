@@ -8,10 +8,9 @@ bazel_dep(name = "gala", version = "1.0.0")
 bazel_dep(name = "gazelle", version = "0.47.0")
 bazel_dep(name = "rules_go", version = "0.59.0")
 
-git_override(
+local_path_override(
     module_name = "gala",
-    remote = "https://github.com/martianoff/gala.git",
-    tag = "0.13.0",
+    path = "../gala_simple",
 )
 
 go_sdk = use_extension("@rules_go//go:extensions.bzl", "go_sdk")

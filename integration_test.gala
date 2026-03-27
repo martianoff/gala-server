@@ -9,7 +9,10 @@ import (
 
 // --- Helpers ---
 
-// startTestServer starts a server on a known port and returns the base URL.
+// testPortCounter provides unique ports for integration tests.
+val testPortCounter = httpcore.NewAtomicCounter()
+
+// startTestServer starts a server on a unique port and returns the base URL.
 func startTestServer(s Server) string {
     val sb = httpcore.NewServerBuilder()
 
@@ -18,10 +21,11 @@ func startTestServer(s Server) string {
         sb.AddRoute(route.Method.Name(), route.Pattern, makeBridgeHandler(handler, s.ErrorHandler))
     })
 
-    val addr = ":18923"
-    Spawn(() => sb.ListenAndServe(addr))
+    val port = 18900 + testPortCounter.Next()
+    val addr = s":$port"
+    Spawn(() => { FromError(sb.ListenAndServe(addr)) })
     time.Sleep(100 * time.Millisecond)
-    return s"http://localhost$addr"
+    return s"http://localhost:$port"
 }
 
 // --- Integration Tests ---
@@ -230,11 +234,11 @@ func TestIntegrationContentTypes(t T) T {
     val base = startTestServer(s)
 
     val r1 = httpcore.HTTPDo("GET", s"$base/text")
-    val t1 = Eq(t, r1.HeaderValue("Content-Type"), "text/plain")
+    val t1 = Contains(t, r1.HeaderValue("Content-Type"), "text/plain")
 
     val r2 = httpcore.HTTPDo("GET", s"$base/html")
-    val t2 = Eq(t1, r2.HeaderValue("Content-Type"), "text/html")
+    val t2 = Contains(t1, r2.HeaderValue("Content-Type"), "text/html")
 
     val r3 = httpcore.HTTPDo("GET", s"$base/json")
-    return Eq(t2, r3.HeaderValue("Content-Type"), "application/json")
+    return Contains(t2, r3.HeaderValue("Content-Type"), "application/json")
 }

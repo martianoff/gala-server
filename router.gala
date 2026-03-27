@@ -11,7 +11,7 @@ struct Route(Method Method, Pattern string, Handler Handler, Name string)
 
 // liftHandler wraps a sync handler into an async Handler.
 func liftHandler(handler func(Request) Response) Handler =
-    (req Request) => FutureApply[Response](() => handler(req))
+    (req Request) => FutureApply(() => handler(req))
 
 // applyFilters wraps a handler with an Array of filters (outermost first).
 func applyFilters(handler Handler, filters Array[Filter]) Handler =

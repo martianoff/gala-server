@@ -506,7 +506,7 @@ func JWTAuthWithConfig(secret string, checkExpiry bool) Filter =
     (req Request, next Handler) => {
         val header = req.Header("Authorization").GetOrElse("")
         if header == "" || !strings.HasPrefix(header, "Bearer ") {
-            return FutureOf[Response](Unauthorized("Missing Bearer token"))
+            return FutureOf(Unauthorized("Missing Bearer token"))
         }
         val token = strings.TrimPrefix(header, "Bearer ")
         val result = httpcore.ParseAndValidateJWT(token, secret, checkExpiry)
@@ -522,7 +522,7 @@ func JWTAuthWithConfig(secret string, checkExpiry bool) Filter =
             return next(req)
         }
         val errMsg = result.Error
-        return FutureOf[Response](Unauthorized(s"Invalid token: $errMsg"))
+        return FutureOf(Unauthorized(s"Invalid token: $errMsg"))
     }
 
 // ========================
@@ -544,7 +544,7 @@ func ProxyWithTimeout(target string, timeout time.Duration) Filter {
 }
 
 func proxyFilter(config *httpcore.ProxyConfig) Filter =
-    (req Request, next Handler) => FutureApply[Response](() => {
+    (req Request, next Handler) => FutureApply(() => {
         val headers = httpcore.ProxyRequestHeaders(req.bridge)
         val result = httpcore.ProxyRequest(config, req.Method().Name(), req.Path(), req.RawQuery(), req.Body(), headers)
         if result.Error != "" {
