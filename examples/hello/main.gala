@@ -115,10 +115,10 @@ func adminConfigHandler(req Request) Response =
 func adminTokenValidator(token string) bool = token == "admin-secret"
 
 func errorHandler(err error) Response =
-    NewHTTPError(StatusInternalError(), s"$err").ToJsonResponse()
+    InternalError(s"Server error: $err")
 
 func notFoundHandler(req Request) Response =
-    NewHTTPError(StatusNotFound(), s"${req.Method().Name()} ${req.Path()} not found").ToJsonResponse()
+    NotFound(s"${req.Method().Name()} ${req.Path()} not found")
 
 func warmupHandler() {
     Println("   Warming up...")
