@@ -309,7 +309,10 @@ func (s Server) ListenGracefulTLSOn(addr string, certFile string, keyFile string
 // --- Internal ---
 
 func (s Server) runWarmup() {
-    s.warmup.ForEach((handler) => handler())
+    s.warmup match {
+        case Some(handler) => handler()
+        case None() => {}
+    }
 }
 
 func (s Server) buildServerBuilder() *httpcore.ServerBuilder {
