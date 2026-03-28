@@ -7,7 +7,7 @@ on:
     branches: [master]
 
 env:
-  GALA_VERSION: "0.20.0"
+  GALA_VERSION: "0.23.0"
 
 jobs:
   build:
@@ -20,10 +20,22 @@ jobs:
           curl -fsSL -o /usr/local/bin/gala \
             "https://github.com/martianoff/gala/releases/download/${GALA_VERSION}/gala-linux-amd64"
           chmod +x /usr/local/bin/gala
-          gala --version
+          gala version
 
       - name: Regenerate go.mod for this environment
         run: gala mod tidy
+
+      - name: Use remote GALA module for CI
+        run: |
+          sed -i '/^local_path_override(/,/^)/d' MODULE.bazel
+          cat >> MODULE.bazel << 'EOF'
+
+          git_override(
+              module_name = "gala",
+              remote = "https://github.com/martianoff/gala.git",
+              tag = "0.23.0",
+          )
+          EOF
 
       - name: Setup Bazel
         uses: bazel-contrib/setup-bazel@0.14.0
