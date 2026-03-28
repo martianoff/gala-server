@@ -7,7 +7,7 @@ on:
     branches: [master]
 
 env:
-  GALA_VERSION: "0.23.0"
+  GALA_VERSION: "0.24.0"
 
 jobs:
   build:
@@ -24,7 +24,8 @@ jobs:
 
       - name: Clone GALA toolchain
         run: |
-          git clone https://github.com/martianoff/gala.git ../gala_simple
+          git clone --depth 1 --branch ${GALA_VERSION} \
+            https://github.com/martianoff/gala.git ../gala_simple
 
       - name: Regenerate go.mod
         run: gala mod tidy
