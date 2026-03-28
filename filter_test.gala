@@ -881,7 +881,7 @@ func TestComposeFiltersCustom(t T) T {
 // ============================================================================
 
 func TestWhenAppliesWhenTrue(t T) T {
-    val authWhenAPI = When(
+    val authWhenAPI = WhenFilter(
         (r) => r.Path() == "/api",
         Auth())
     // Request to /api without auth header should be rejected
@@ -891,7 +891,7 @@ func TestWhenAppliesWhenTrue(t T) T {
 }
 
 func TestWhenSkipsWhenFalse(t T) T {
-    val authWhenAPI = When(
+    val authWhenAPI = WhenFilter(
         (r) => r.Path() == "/api",
         Auth())
     // Request to /health should pass through without auth
@@ -1039,7 +1039,7 @@ func TestCircuitBreakerOpensAfterFailures(t T) T {
 // ============================================================================
 
 func TestRetrySuccessOnFirstAttempt(t T) T {
-    val retry = Retry(3, 1 * time.Millisecond)
+    val retry = RetryFilter(3, 1 * time.Millisecond)
     val r = mkReq(req("GET", "/"))
     val resp = retry(r, okHandler).Get()
     return Eq(t, resp.Code(), 200)
@@ -1054,7 +1054,7 @@ func TestRetryRetriesOnFailure(t T) T {
         }
         return Ok("recovered")
     })
-    val retry = Retry(3, 1 * time.Millisecond)
+    val retry = RetryFilter(3, 1 * time.Millisecond)
     val r = mkReq(req("GET", "/"))
     val resp = retry(r, flakyHandler).Get()
     val t1 = Eq(t, resp.Code(), 200)

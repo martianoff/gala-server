@@ -573,9 +573,9 @@ func ComposeFilters(outer Filter, inner Filter) Filter =
         return outer(req, innerHandler)
     }
 
-// When returns a conditional filter that only applies when the predicate is true.
+// WhenFilter returns a conditional filter that only applies when the predicate is true.
 // If the predicate returns false, the handler is called directly without the filter.
-func When(predicate func(Request) bool, filter Filter) Filter =
+func WhenFilter(predicate func(Request) bool, filter Filter) Filter =
     (req Request, next Handler) => {
         if predicate(req) {
             return filter(req, next)
@@ -673,9 +673,9 @@ func CircuitBreaker(
 // Retry Filter
 // ========================
 
-// Retry returns a filter that retries failed requests up to maxRetries times
+// RetryFilter returns a filter that retries failed requests up to maxRetries times
 // with a fixed backoff duration between attempts.
-func Retry(maxRetries int = 3, backoff time.Duration = 100 * time.Millisecond) Filter =
+func RetryFilter(maxRetries int = 3, backoff time.Duration = 100 * time.Millisecond) Filter =
     (req Request, next Handler) => FutureApply(() => {
         var lastResp = InternalError("Request failed: no attempts made")
         var attempts = 0
@@ -699,9 +699,9 @@ func Retry(maxRetries int = 3, backoff time.Duration = 100 * time.Millisecond) F
         return lastResp
     })
 
-// RetryWithBackoff returns a filter that retries with exponential backoff.
+// RetryFilterWithBackoff returns a filter that retries with exponential backoff.
 // The backoff duration doubles after each attempt, capped at maxBackoff.
-func RetryWithBackoff(
+func RetryFilterWithBackoff(
     maxRetries int = 3,
     initialBackoff time.Duration = 100 * time.Millisecond,
     maxBackoff time.Duration = 5 * time.Second,

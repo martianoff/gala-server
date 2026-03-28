@@ -591,7 +591,7 @@ Compose and conditionally apply filters:
 ComposeFilters(outer, inner)
 
 // Conditional: apply filter only when predicate returns true
-When((req) => req.Path() != "/health", Auth())
+WhenFilter((req) => req.Path() != "/health", Auth())
 
 // Skip filter for specific paths
 Skip(Logger(), "/health", "/ready", "/metrics")
@@ -627,10 +627,10 @@ Three states:
 
 ```gala
 // Fixed backoff between retries
-Retry(maxRetries = 3, backoff = 100 * time.Millisecond)
+RetryFilter(maxRetries = 3, backoff = 100 * time.Millisecond)
 
 // Exponential backoff: doubles each attempt, capped at maxBackoff
-RetryWithBackoff(
+RetryFilterWithBackoff(
     maxRetries = 3,
     initialBackoff = 100 * time.Millisecond,
     maxBackoff = 5 * time.Second,

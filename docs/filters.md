@@ -79,7 +79,7 @@ Conditionally applies a filter only when the predicate returns true. If the pred
 
 ```gala
 // Only apply auth to non-health-check paths
-val conditionalAuth = When((req) => req.Path() != "/health", Auth())
+val conditionalAuth = WhenFilter((req) => req.Path() != "/health", Auth())
 
 server.WithFilter(conditionalAuth)
 ```
@@ -266,10 +266,10 @@ Retry failed requests with configurable backoff strategies:
 
 ```gala
 // Fixed backoff: wait 100ms between each retry
-server.WithFilter(Retry(maxRetries = 3, backoff = 100 * time.Millisecond))
+server.WithFilter(RetryFilter(maxRetries = 3, backoff = 100 * time.Millisecond))
 
 // Exponential backoff: 100ms -> 200ms -> 400ms -> ... capped at 5s
-server.WithFilter(RetryWithBackoff(
+server.WithFilter(RetryFilterWithBackoff(
     maxRetries = 3,
     initialBackoff = 100 * time.Millisecond,
     maxBackoff = 5 * time.Second,
