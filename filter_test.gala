@@ -1083,3 +1083,58 @@ func TestBulkheadRejectsWhenFull(t T) T {
     val t1 = Eq(t, resp1.Code(), 200)
     return t1
 }
+
+// ============================================================================
+// Power Features — Sliding Window Rate Limiter Tests
+// ============================================================================
+
+func TestSlidingWindowAllowsRequests(t T) T {
+    val filter = RateLimitSlidingWindow(10, 1 * time.Second)
+    val r = mkReq(req("GET", "/"))
+    val resp = filter(r, okHandler).Get()
+    return Eq(t, resp.Code(), 200)
+}
+
+func TestSlidingWindowRejectsWhenExhausted(t T) T {
+    // Allow only 2 requests per second
+    val filter = RateLimitSlidingWindow(2, 1 * time.Second)
+    val r = mkReq(req("GET", "/"))
+    val resp1 = filter(r, okHandler).Get()
+    val resp2 = filter(r, okHandler).Get()
+    val resp3 = filter(r, okHandler).Get()
+    val t1 = Eq(t, resp1.Code(), 200)
+    val t2 = Eq(t1, resp2.Code(), 200)
+    val t3 = Eq(t2, resp3.Code(), 429)
+    return Contains(t3, resp3.HeaderValue("Retry-After"), "1")
+}
+
+func TestSlidingWindowPerIPAllowsDifferentIPs(t T) T {
+    val filter = RateLimitSlidingWindowPerIP(1, 1 * time.Second)
+    val r1 = mkReq(req("GET", "/").WithRemoteAddr("10.0.0.1:1234"))
+    val r2 = mkReq(req("GET", "/").WithRemoteAddr("10.0.0.2:1234"))
+    val resp1 = filter(r1, okHandler).Get()
+    val resp2 = filter(r2, okHandler).Get()
+    // Different IPs should each get their own window
+    val t1 = Eq(t, resp1.Code(), 200)
+    return Eq(t1, resp2.Code(), 200)
+}
+
+func TestSlidingWindowPerIPRejectsSameIP(t T) T {
+    val filter = RateLimitSlidingWindowPerIP(1, 1 * time.Second)
+    val r1 = mkReq(req("GET", "/").WithRemoteAddr("10.0.0.1:1234"))
+    val r2 = mkReq(req("GET", "/").WithRemoteAddr("10.0.0.1:5678"))
+    val resp1 = filter(r1, okHandler).Get()
+    val resp2 = filter(r2, okHandler).Get()
+    val t1 = Eq(t, resp1.Code(), 200)
+    return Eq(t1, resp2.Code(), 429)
+}
+
+func TestSlidingWindowCreation(t T) T {
+    val filter = RateLimitSlidingWindow(100, 1 * time.Minute)
+    return IsTrue(t, filter != nil)
+}
+
+func TestSlidingWindowPerIPCreation(t T) T {
+    val filter = RateLimitSlidingWindowPerIP(100, 1 * time.Minute)
+    return IsTrue(t, filter != nil)
+}

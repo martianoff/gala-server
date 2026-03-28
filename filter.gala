@@ -754,6 +754,44 @@ func RetryWithBackoff(
 // Bulkhead (Concurrency Limiter) Filter
 // ========================
 
+// ========================
+// Sliding Window Rate Limiter
+// ========================
+
+// RateLimitSlidingWindow returns a filter that limits requests using a sliding window counter.
+// More accurate than token bucket for bursty traffic — counts exact requests within the window.
+// maxRequests is the maximum allowed requests within the window duration.
+func RateLimitSlidingWindow(maxRequests int, window time.Duration) Filter {
+    val limiter = httpcore.NewSlidingWindowLimiter(maxRequests, window)
+    return (req Request, next Handler) => {
+        if limiter.Allow() {
+            return next(req)
+        }
+        return FutureOf(
+            TooManyRequests("Rate limit exceeded").
+                WithHeader("Retry-After", "1"))
+    }
+}
+
+// RateLimitSlidingWindowPerIP returns a per-IP sliding window rate limiter.
+// Each client IP gets its own sliding window counter.
+func RateLimitSlidingWindowPerIP(maxRequests int, window time.Duration) Filter {
+    val limiter = httpcore.NewPerIPSlidingWindowLimiter(maxRequests, window)
+    return (req Request, next Handler) => {
+        val ip = req.RealIP()
+        if limiter.AllowIP(ip) {
+            return next(req)
+        }
+        return FutureOf(
+            TooManyRequests("Rate limit exceeded").
+                WithHeader("Retry-After", "1"))
+    }
+}
+
+// ========================
+// Bulkhead (Concurrency Limiter) Filter
+// ========================
+
 // Bulkhead returns a filter that limits the number of concurrent requests.
 // When at capacity, returns 503 Service Unavailable.
 func Bulkhead(maxConcurrent int = 100) Filter {

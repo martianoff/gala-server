@@ -1,0 +1,62 @@
+package server
+
+import (
+    . "martianoff/gala/concurrent"
+    "github.com/martianoff/gala-server/httpcore"
+    "time"
+)
+
+// ============================================================================
+// Metrics Filter (Finatra-inspired Observability)
+// ============================================================================
+//
+// Tracks per-route request count, latency, and status code distribution.
+// Exposes a Prometheus-compatible text endpoint via WithMetrics().
+//
+// Example:
+//   val collector = NewMetrics()
+//   val server = NewServer().
+//       WithFilter(MetricsFilter(collector)).
+//       WithMetricsEndpoint("/metrics", collector).
+//       GET("/hello", (req) => Ok("hello")).
+//       ListenGraceful()
+
+// Metrics wraps the Go-side MetricsCollector for use in GALA code.
+type Metrics struct {
+    collector *httpcore.MetricsCollector
+}
+
+// NewMetrics creates a new metrics collector.
+func NewMetrics() Metrics = Metrics(collector = httpcore.NewMetricsCollector())
+
+// TotalRequests returns the total number of recorded requests.
+func (m Metrics) TotalRequests() int64 = m.collector.TotalRequests()
+
+// UptimeSeconds returns the server uptime in seconds.
+func (m Metrics) UptimeSeconds() float64 = m.collector.UptimeSeconds()
+
+// --- Metrics Filter ---
+
+// MetricsFilter returns a filter that records request count, latency, and status codes.
+// Uses Futures — latency is measured from request start to response completion,
+// including async handler execution across goroutines.
+func MetricsFilter(m Metrics) Filter =
+    (req Request, next Handler) => {
+        val start = time.Now()
+        val method = req.Method().Name()
+        val path = req.Path()
+        return next(req).Map((resp) => {
+            val durationNs = time.Since(start).Nanoseconds()
+            m.collector.Record(method, path, resp.Code(), durationNs)
+            return resp
+        })
+    }
+
+// --- Prometheus Endpoint ---
+
+// metricsHandler serves the Prometheus-format metrics endpoint.
+// Returns all collected stats as text/plain with Prometheus text exposition format.
+func metricsHandler(m Metrics) func(Request) Response =
+    (req Request) => NewResponse(StatusOk()).
+        WithBody(m.collector.PrometheusFormat()).
+        WithHeader("Content-Type", "text/plain; version=0.0.4; charset=utf-8")

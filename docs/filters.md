@@ -152,10 +152,23 @@ CorsWithConfig(origins, methods, headers, maxAge)       // Full configuration wi
 
 ### Rate Limiting
 
+Two rate limiting strategies are available:
+
+**Token Bucket** — allows bursts up to `maxTokens`, then refills at a steady rate. Good for smooth traffic shaping:
+
 ```gala
-RateLimit(1000.0, 100.0)      // Global token bucket (max tokens, refill/sec)
-RateLimitPerIP(100.0, 10.0)   // Per-IP rate limiting (separate bucket per IP)
+RateLimit(1000.0, 100.0)      // Global (max tokens, refill/sec)
+RateLimitPerIP(100.0, 10.0)   // Per-IP (separate bucket per IP)
 ```
+
+**Sliding Window** — counts exact requests within a time window. More accurate than token bucket for bursty traffic patterns. No burst allowance beyond the limit:
+
+```gala
+RateLimitSlidingWindow(100, 1 * time.Minute)       // Global (max requests, window duration)
+RateLimitSlidingWindowPerIP(50, 1 * time.Minute)   // Per-IP (separate window per IP)
+```
+
+When the limit is exceeded, both strategies return 429 Too Many Requests with a `Retry-After: 1` header.
 
 ### Request Processing
 
@@ -278,6 +291,52 @@ server.WithFilter(Bulkhead(maxConcurrent = 100))
 When the number of concurrent requests reaches `maxConcurrent`, new requests are immediately rejected with 503 Service Unavailable. The semaphore slot is released when the handler completes, whether it succeeds or fails.
 
 This prevents any single service from consuming all available resources and provides backpressure to callers.
+
+### Metrics (Finatra-inspired)
+
+Records per-request metrics including method, path, status code, and latency. Uses `Future.Map` so latency includes the full async handler execution time. Pairs with `WithMetricsEndpoint` on the Server for a Prometheus-compatible `/metrics` endpoint.
+
+```gala
+val stats = NewMetrics()
+
+val server = NewServer().
+    WithFilter(MetricsFilter(stats)).
+    WithMetricsEndpoint("/metrics", stats).
+    GET("/hello", (req) => Ok("hello"))
+```
+
+**Collected metrics**: total requests, per-route request counts, per-route average/max latency, response status code distribution. All exposed in Prometheus text exposition format at the configured endpoint.
+
+See [API Reference — Metrics](api-reference.md#metrics-prometheus-compatible) for the full list of exposed metrics.
+
+### Session Management
+
+Manages cookie-based sessions backed by a concurrent in-memory store. Reads or creates a session on each request, stores it in the request context, and sets the session cookie on new sessions via `Future.Map`.
+
+```gala
+val sessions = NewSessions("my-secret").
+    WithCookieName("app_session").
+    WithMaxAge(3600).
+    WithSecure(true)
+
+val server = NewServer().
+    WithFilter(SessionFilter(sessions)).
+    GET("/login", (req) => {
+        req.SessionSet("user", "alice")
+        return Ok("logged in")
+    }).
+    GET("/profile", (req) => {
+        val user = req.SessionGet("user").GetOrElse("anonymous")
+        return Ok(s"Hello, $user")
+    })
+```
+
+**Request accessors** (available when `SessionFilter` is active):
+- `req.SessionGet("key")` — `Option[string]`
+- `req.SessionSet("key", "value")` — store a value
+- `req.SessionDelete("key")` — remove a value
+
+See [API Reference — Sessions](api-reference.md#session-management) for configuration options and store management.
 
 ## Writing Custom Filters
 

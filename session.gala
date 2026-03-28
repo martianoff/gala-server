@@ -1,0 +1,136 @@
+package server
+
+import (
+    . "martianoff/gala/concurrent"
+    "github.com/martianoff/gala-server/httpcore"
+    "time"
+)
+
+// ============================================================================
+// Session Management (Cookie-based, In-Memory)
+// ============================================================================
+//
+// Provides cookie-based session management backed by a concurrent in-memory store.
+// Inspired by Finatra's session handling and Express.js sessions.
+//
+// Example:
+//   val store = NewSessionStore("my-secret")
+//   val server = NewServer().
+//       WithFilter(SessionFilter(store)).
+//       GET("/login", (req) => {
+//           req.SessionSet("user", "alice")
+//           return Ok("logged in")
+//       }).
+//       GET("/profile", (req) => {
+//           val user = req.SessionGet("user").GetOrElse("anonymous")
+//           return Ok(s"Hello, $user")
+//       })
+
+// Sessions wraps the Go-side SessionStore for GALA code.
+type Sessions struct {
+    store      *httpcore.SessionStore
+    CookieName string
+    MaxAge     int
+    Secure     bool
+    HttpOnly   bool
+}
+
+// NewSessions creates a new session store with default cookie settings.
+func NewSessions(secret string) Sessions = Sessions(
+    store = httpcore.NewSessionStore(secret),
+    CookieName = "gala_session",
+    MaxAge = 86400,
+    Secure = false,
+    HttpOnly = true,
+)
+
+// WithCookieName returns a copy with a custom cookie name.
+func (s Sessions) WithCookieName(name string) Sessions =
+    Sessions(store = s.store, CookieName = name, MaxAge = s.MaxAge, Secure = s.Secure, HttpOnly = s.HttpOnly)
+
+// WithMaxAge returns a copy with a custom max age (seconds).
+func (s Sessions) WithMaxAge(maxAge int) Sessions =
+    Sessions(store = s.store, CookieName = s.CookieName, MaxAge = maxAge, Secure = s.Secure, HttpOnly = s.HttpOnly)
+
+// WithSecure returns a copy with the Secure flag set.
+func (s Sessions) WithSecure(secure bool) Sessions =
+    Sessions(store = s.store, CookieName = s.CookieName, MaxAge = s.MaxAge, Secure = secure, HttpOnly = s.HttpOnly)
+
+// SessionCount returns the number of active sessions.
+func (s Sessions) SessionCount() int = s.store.SessionCount()
+
+// Cleanup removes sessions older than the given duration.
+// Returns the number of sessions removed.
+func (s Sessions) Cleanup(maxAge time.Duration) int = s.store.Cleanup(maxAge)
+
+// --- Session Filter ---
+
+// SessionFilter returns a filter that manages sessions via cookies.
+// On each request, it reads the session cookie (or creates a new session),
+// stores the session data in the request context, and sets the session cookie
+// on the response. Handlers access sessions via req.SessionGet/SessionSet.
+//
+// Uses Futures — the session lookup happens before handler execution,
+// and cookie setting happens after the Future resolves.
+func SessionFilter(sessions Sessions) Filter =
+    (req Request, next Handler) => {
+        val cookieName = sessions.CookieName
+        val existingID = req.Cookie(cookieName).GetOrElse("")
+        val session, sessionID, isNew = sessions.store.GetOrCreate(existingID)
+
+        // Store session reference in request context for handler access
+        req.CtxSet("_session", session)
+        req.CtxSet("_session_id", sessionID)
+
+        return next(req).Map((resp) => {
+            if isNew {
+                return resp.WithCookie(Cookie(
+                    Name = cookieName,
+                    Value = sessionID,
+                    Path = "/",
+                    Domain = "",
+                    MaxAge = sessions.MaxAge,
+                    Secure = sessions.Secure,
+                    HttpOnly = sessions.HttpOnly,
+                    SameSite = "Lax",
+                ))
+            }
+            return resp
+        })
+    }
+
+// --- Request Session Accessors ---
+
+// SessionGet retrieves a value from the current session.
+// Requires SessionFilter to be active.
+func (r Request) SessionGet(key string) Option[string] {
+    val session, ok = httpcore.SessionFromContext(r.bridge.CtxValues())
+    if !ok {
+        return None[string]()
+    }
+    val v, found = session.Get(key)
+    if !found {
+        return None[string]()
+    }
+    return Some(v)
+}
+
+// SessionSet stores a value in the current session.
+// Requires SessionFilter to be active.
+func (r Request) SessionSet(key string, value string) {
+    val session, ok = httpcore.SessionFromContext(r.bridge.CtxValues())
+    if !ok {
+        return
+    }
+    session.Set(key, value)
+}
+
+// SessionDelete removes a value from the current session.
+// Requires SessionFilter to be active.
+func (r Request) SessionDelete(key string) {
+    val session, ok = httpcore.SessionFromContext(r.bridge.CtxValues())
+    if !ok {
+        return
+    }
+    session.Delete(key)
+}

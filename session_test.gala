@@ -1,0 +1,217 @@
+package server
+
+import (
+    . "martianoff/gala/test"
+    . "martianoff/gala/concurrent"
+    "github.com/martianoff/gala-server/httpcore"
+    "time"
+)
+
+// ============================================================================
+// Test Helpers
+// ============================================================================
+
+func sessReq(method string, path string) *httpcore.TestRequestBuilder =
+    httpcore.NewTestRequestBuilder(method, path)
+
+func buildSessReq(b *httpcore.TestRequestBuilder) Request = Request(bridge = b.Build())
+
+val sessOkHandler Handler = (r Request) => FutureOf(Ok("ok"))
+
+// ============================================================================
+// Sessions Configuration Tests
+// ============================================================================
+
+func TestNewSessions(t T) T {
+    val s = NewSessions("secret")
+    val t1 = Eq(t, s.CookieName, "gala_session")
+    val t2 = Eq(t1, s.MaxAge, 86400)
+    val t3 = IsFalse(t2, s.Secure)
+    return IsTrue(t3, s.HttpOnly)
+}
+
+func TestSessionsWithCookieName(t T) T {
+    val s = NewSessions("secret").WithCookieName("my_sess")
+    return Eq(t, s.CookieName, "my_sess")
+}
+
+func TestSessionsWithMaxAge(t T) T {
+    val s = NewSessions("secret").WithMaxAge(3600)
+    return Eq(t, s.MaxAge, 3600)
+}
+
+func TestSessionsWithSecure(t T) T {
+    val s = NewSessions("secret").WithSecure(true)
+    return IsTrue(t, s.Secure)
+}
+
+func TestSessionCount(t T) T {
+    val s = NewSessions("secret")
+    return Eq(t, s.SessionCount(), 0)
+}
+
+// ============================================================================
+// Session Filter Tests
+// ============================================================================
+
+func TestSessionFilterCreatesNewSession(t T) T {
+    val sessions = NewSessions("secret")
+    val filter = SessionFilter(sessions)
+    val r = buildSessReq(sessReq("GET", "/test"))
+    val resp = filter(r, sessOkHandler).Get()
+
+    // Should set session cookie on new session
+    val t1 = Eq(t, resp.Code(), 200)
+    val cookies = resp.Cookies
+    val t2 = Eq(t1, cookies.Size(), 1)
+    val cookie = cookies.Head()
+    val t3 = Eq(t2, cookie.Name, "gala_session")
+    val t4 = IsTrue(t3, cookie.Value != "")
+    val t5 = Eq(t4, cookie.Path, "/")
+    val t6 = IsTrue(t5, cookie.HttpOnly)
+    return Eq(t6, sessions.SessionCount(), 1)
+}
+
+func TestSessionFilterReusesExistingSession(t T) T {
+    val sessions = NewSessions("secret")
+    val filter = SessionFilter(sessions)
+
+    // First request creates a session
+    val r1 = buildSessReq(sessReq("GET", "/test"))
+    val resp1 = filter(r1, sessOkHandler).Get()
+    val sessionID = resp1.Cookies.Head().Value
+
+    // Second request with the session cookie should reuse the session
+    val r2 = buildSessReq(sessReq("GET", "/test").WithCookie("gala_session", sessionID))
+    val resp2 = filter(r2, sessOkHandler).Get()
+
+    // Should NOT set a new cookie (session already exists)
+    val t1 = Eq(t, resp2.Cookies.Size(), 0)
+    return Eq(t1, sessions.SessionCount(), 1)
+}
+
+// ============================================================================
+// Session Get/Set Tests
+// ============================================================================
+
+func TestSessionSetAndGet(t T) T {
+    val sessions = NewSessions("secret")
+    val filter = SessionFilter(sessions)
+
+    // Handler that sets a session value
+    val setHandler Handler = (r Request) => {
+        r.SessionSet("user", "alice")
+        return FutureOf(Ok("set"))
+    }
+
+    // Handler that reads a session value
+    val getHandler Handler = (r Request) => {
+        val user = r.SessionGet("user").GetOrElse("none")
+        return FutureOf(Ok(user))
+    }
+
+    // Set the value
+    val r1 = buildSessReq(sessReq("GET", "/login"))
+    val resp1 = filter(r1, setHandler).Get()
+    val sessionID = resp1.Cookies.Head().Value
+
+    // Read the value with the same session
+    val r2 = buildSessReq(sessReq("GET", "/profile").WithCookie("gala_session", sessionID))
+    val resp2 = filter(r2, getHandler).Get()
+    return Eq(t, resp2.Body, "alice")
+}
+
+func TestSessionGetMissing(t T) T {
+    val sessions = NewSessions("secret")
+    val filter = SessionFilter(sessions)
+
+    val handler Handler = (r Request) => {
+        val v = r.SessionGet("nonexistent").GetOrElse("default")
+        return FutureOf(Ok(v))
+    }
+
+    val r = buildSessReq(sessReq("GET", "/test"))
+    val resp = filter(r, handler).Get()
+    return Eq(t, resp.Body, "default")
+}
+
+func TestSessionDelete(t T) T {
+    val sessions = NewSessions("secret")
+    val filter = SessionFilter(sessions)
+
+    // Set then delete
+    val setHandler Handler = (r Request) => {
+        r.SessionSet("key", "value")
+        r.SessionDelete("key")
+        val v = r.SessionGet("key").GetOrElse("gone")
+        return FutureOf(Ok(v))
+    }
+
+    val r = buildSessReq(sessReq("GET", "/test"))
+    val resp = filter(r, setHandler).Get()
+    return Eq(t, resp.Body, "gone")
+}
+
+func TestSessionGetWithoutFilter(t T) T {
+    // SessionGet without filter should return None
+    val r = buildSessReq(sessReq("GET", "/test"))
+    val v = r.SessionGet("key")
+    return IsNone(t, v)
+}
+
+// ============================================================================
+// Session Cleanup Tests
+// ============================================================================
+
+func TestSessionCleanupRemovesExpired(t T) T {
+    val sessions = NewSessions("secret")
+    val filter = SessionFilter(sessions)
+
+    // Create two sessions
+    val r1 = buildSessReq(sessReq("GET", "/a"))
+    val r2 = buildSessReq(sessReq("GET", "/b"))
+    filter(r1, sessOkHandler).Get()
+    filter(r2, sessOkHandler).Get()
+
+    val t1 = Eq(t, sessions.SessionCount(), 2)
+    // Wait briefly so sessions have non-zero age, then clean with tiny maxAge
+    time.Sleep(5 * time.Millisecond)
+    val removed = sessions.Cleanup(1 * time.Millisecond)
+    val t2 = Eq(t1, removed, 2)
+    return Eq(t2, sessions.SessionCount(), 0)
+}
+
+func TestSessionCleanupKeepsFresh(t T) T {
+    val sessions = NewSessions("secret")
+    val filter = SessionFilter(sessions)
+
+    // Create a session
+    val r = buildSessReq(sessReq("GET", "/test"))
+    filter(r, sessOkHandler).Get()
+
+    val t1 = Eq(t, sessions.SessionCount(), 1)
+    // Cleanup with 1 hour — session was just created, should survive
+    val removed = sessions.Cleanup(1 * time.Hour)
+    val t2 = Eq(t1, removed, 0)
+    return Eq(t2, sessions.SessionCount(), 1)
+}
+
+// ============================================================================
+// Server WithFilter Session Test
+// ============================================================================
+
+func TestServerWithSessionFilter(t T) T {
+    val sessions = NewSessions("secret")
+    val s = NewServer().
+        WithFilter(SessionFilter(sessions)).
+        GET("/login", (req) => {
+            req.SessionSet("user", "bob")
+            return Ok("logged in")
+        }).
+        GET("/profile", (req) => {
+            val user = req.SessionGet("user").GetOrElse("anonymous")
+            return Ok(s"Hello, $user")
+        })
+    val t1 = Eq(t, s.RouteCount(), 2)
+    return Eq(t1, s.FilterCount(), 1)
+}

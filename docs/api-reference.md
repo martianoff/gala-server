@@ -526,9 +526,18 @@ CorsWithConfig(origins, methods, headers, maxAge)       // Full configuration
 ### Rate Limiting
 
 ```gala
-RateLimit(1000.0, 100.0)      // Global token bucket (max tokens, refill/sec)
-RateLimitPerIP(100.0, 10.0)   // Per-IP rate limiting
+// Token bucket (burst-friendly, configurable refill rate)
+RateLimit(1000.0, 100.0)              // Global (max tokens, refill/sec)
+RateLimitPerIP(100.0, 10.0)           // Per-IP
+
+// Sliding window (more accurate for bursty traffic)
+RateLimitSlidingWindow(100, 1 * time.Minute)        // Global (max requests, window duration)
+RateLimitSlidingWindowPerIP(50, 1 * time.Minute)    // Per-IP
 ```
+
+**Token bucket** allows bursts up to `maxTokens`, then refills at `refillPerSecond`. Good for smooth rate limiting.
+
+**Sliding window** counts exact requests within the time window. More accurate than token bucket for bursty traffic patterns — no burst allowance beyond the limit.
 
 ### Request Processing
 
@@ -638,21 +647,142 @@ Bulkhead(maxConcurrent = 100)
 
 Limits the number of concurrent in-flight requests using a semaphore. When at capacity, immediately returns 503 Service Unavailable. Releases the semaphore slot when the handler completes (success or failure).
 
+## Metrics (Prometheus-compatible)
+
+Built-in request metrics with a Prometheus text exposition endpoint. Inspired by Twitter Finatra's `StatsReceiver`.
+
+### Setup
+
+```gala
+val stats = NewMetrics()
+
+val server = NewServer().
+    WithFilter(MetricsFilter(stats)).
+    WithMetricsEndpoint("/metrics", stats).
+    GET("/hello", (req) => Ok("hello")).
+    ListenGraceful()
+```
+
+### NewMetrics
+
+Creates a new metrics collector. Thread-safe via atomic counters.
+
+```gala
+val stats = NewMetrics()
+stats.TotalRequests()    // int64 — total recorded requests
+stats.UptimeSeconds()    // float64 — server uptime
+```
+
+### MetricsFilter
+
+Records per-request metrics including method, path, status code, and latency. Uses `Future.Map` so latency measurement includes the full async handler execution across goroutines.
+
+```gala
+server.WithFilter(MetricsFilter(stats))
+```
+
+### WithMetricsEndpoint
+
+Registers a GET endpoint that serves all collected metrics in Prometheus text exposition format:
+
+```gala
+server.WithMetricsEndpoint("/metrics", stats)
+```
+
+**Exposed metrics:**
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `gala_requests_total` | counter | Total HTTP requests |
+| `gala_uptime_seconds` | gauge | Server uptime |
+| `gala_responses_total{status}` | counter | Responses by status code |
+| `gala_route_requests_total{route}` | counter | Requests per route |
+| `gala_route_latency_avg_ms{route}` | gauge | Average latency per route |
+| `gala_route_latency_max_ms{route}` | gauge | Max latency per route |
+
+## Session Management
+
+Cookie-based in-memory session management with concurrent access support. Inspired by Finatra's session handling and Express.js sessions.
+
+### Setup
+
+```gala
+val sessions = NewSessions("my-secret")
+
+val server = NewServer().
+    WithFilter(SessionFilter(sessions)).
+    GET("/login", (req) => {
+        req.SessionSet("user", "alice")
+        return Ok("logged in")
+    }).
+    GET("/profile", (req) => {
+        val user = req.SessionGet("user").GetOrElse("anonymous")
+        return Ok(s"Hello, $user")
+    })
+```
+
+### NewSessions
+
+Creates a new session store with default settings:
+
+```gala
+val sessions = NewSessions("my-secret")
+// Defaults: cookie name = "gala_session", max age = 86400s, httpOnly = true, secure = false
+```
+
+### Configuration
+
+```gala
+val sessions = NewSessions("secret").
+    WithCookieName("my_session").   // custom cookie name
+    WithMaxAge(3600).               // 1 hour session lifetime
+    WithSecure(true)                // HTTPS-only cookies
+```
+
+### SessionFilter
+
+Filter that manages session lifecycle. On each request:
+1. Reads the session cookie (or creates a new session)
+2. Stores session data in the request context
+3. After the handler completes (via `Future.Map`), sets the session cookie on new sessions
+
+```gala
+server.WithFilter(SessionFilter(sessions))
+```
+
+### Request Session Accessors
+
+Available on any `Request` when `SessionFilter` is active:
+
+```gala
+req.SessionGet("key")                // Option[string] — retrieve a session value
+req.SessionSet("key", "value")       // store a session value
+req.SessionDelete("key")             // remove a session value
+```
+
+### Session Store Management
+
+```gala
+sessions.SessionCount()              // int — number of active sessions
+sessions.Cleanup(1 * time.Hour)      // int — remove sessions inactive for > 1 hour, returns count removed
+```
+
 ## Architecture
 
 ```
-+---------------------------------------------+
-|              GALA Server Layer               |
-|  (server.gala, request.gala, response.gala,  |
-|   filter.gala, group.gala, router.gala,      |
-|   types.gala, extractor.gala, sse.gala)      |
-+---------------------------------------------+
-|           httpcore Bridge (Go)              |
-|  (~500 lines - the ONLY Go code)            |
-|  BridgeRequest, BridgeResponse,             |
-|  ServerBuilder, CircuitBreaker, Semaphore,   |
-|  TokenBucket, HMACSigner, ETag              |
-+---------------------------------------------+
-|              Go net/http                     |
-+---------------------------------------------+
++-----------------------------------------------+
+|               GALA Server Layer                |
+|  server.gala, request.gala, response.gala,     |
+|  filter.gala, group.gala, router.gala,         |
+|  types.gala, extractor.gala, sse.gala,         |
+|  metrics.gala, session.gala                    |
++-----------------------------------------------+
+|            httpcore Bridge (Go)                |
+|  BridgeRequest, BridgeResponse, ServerBuilder, |
+|  CircuitBreaker, Semaphore, TokenBucket,       |
+|  SlidingWindowLimiter, MetricsCollector,       |
+|  SessionStore, HMACSigner, ETag, JWT           |
++-----------------------------------------------+
+|               Go net/http                      |
++-----------------------------------------------+
 ```

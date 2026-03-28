@@ -1435,3 +1435,380 @@ func ComputeETag(body string) string {
 	h := sha256.Sum256([]byte(body))
 	return `"` + hex.EncodeToString(h[:8]) + `"`
 }
+
+// ============================================================================
+// Metrics Collector (Finatra-inspired stats)
+// ============================================================================
+
+// MetricsCollector tracks per-route request counts, latency, and status codes.
+// Thread-safe via atomic operations and mutexes.
+type MetricsCollector struct {
+	mu           sync.RWMutex
+	totalReqs    int64
+	routeMetrics map[string]*RouteMetrics
+	statusCounts map[int]*int64 // status code -> count
+	startTime    time.Time
+}
+
+// RouteMetrics holds metrics for a single route pattern.
+type RouteMetrics struct {
+	Count      int64
+	TotalNs    int64 // total latency in nanoseconds
+	MinNs      int64
+	MaxNs      int64
+	StatusHist map[int]*int64 // per-route status histogram
+	mu         sync.Mutex
+}
+
+// NewMetricsCollector creates a new metrics collector.
+func NewMetricsCollector() *MetricsCollector {
+	return &MetricsCollector{
+		routeMetrics: make(map[string]*RouteMetrics),
+		statusCounts: make(map[int]*int64),
+		startTime:    time.Now(),
+	}
+}
+
+// Record records a request's metrics.
+func (mc *MetricsCollector) Record(method, path string, status int, durationNs int64) {
+	atomic.AddInt64(&mc.totalReqs, 1)
+
+	// Global status count
+	mc.mu.RLock()
+	counter, ok := mc.statusCounts[status]
+	mc.mu.RUnlock()
+	if !ok {
+		mc.mu.Lock()
+		counter, ok = mc.statusCounts[status]
+		if !ok {
+			var c int64
+			counter = &c
+			mc.statusCounts[status] = counter
+		}
+		mc.mu.Unlock()
+	}
+	atomic.AddInt64(counter, 1)
+
+	// Per-route metrics
+	key := method + " " + path
+	mc.mu.RLock()
+	rm, ok := mc.routeMetrics[key]
+	mc.mu.RUnlock()
+	if !ok {
+		mc.mu.Lock()
+		rm, ok = mc.routeMetrics[key]
+		if !ok {
+			rm = &RouteMetrics{
+				MinNs:      durationNs,
+				MaxNs:      durationNs,
+				StatusHist: make(map[int]*int64),
+			}
+			mc.routeMetrics[key] = rm
+		}
+		mc.mu.Unlock()
+	}
+
+	atomic.AddInt64(&rm.Count, 1)
+	atomic.AddInt64(&rm.TotalNs, durationNs)
+
+	rm.mu.Lock()
+	if durationNs < rm.MinNs {
+		rm.MinNs = durationNs
+	}
+	if durationNs > rm.MaxNs {
+		rm.MaxNs = durationNs
+	}
+	sc, ok := rm.StatusHist[status]
+	if !ok {
+		var c int64
+		sc = &c
+		rm.StatusHist[status] = sc
+	}
+	*sc++
+	rm.mu.Unlock()
+}
+
+// TotalRequests returns the total number of recorded requests.
+func (mc *MetricsCollector) TotalRequests() int64 {
+	return atomic.LoadInt64(&mc.totalReqs)
+}
+
+// UptimeSeconds returns the server uptime in seconds.
+func (mc *MetricsCollector) UptimeSeconds() float64 {
+	return time.Since(mc.startTime).Seconds()
+}
+
+// PrometheusFormat returns all metrics in Prometheus text exposition format.
+func (mc *MetricsCollector) PrometheusFormat() string {
+	var sb strings.Builder
+
+	total := atomic.LoadInt64(&mc.totalReqs)
+	uptime := mc.UptimeSeconds()
+
+	sb.WriteString("# HELP gala_requests_total Total number of HTTP requests.\n")
+	sb.WriteString("# TYPE gala_requests_total counter\n")
+	sb.WriteString(fmt.Sprintf("gala_requests_total %d\n\n", total))
+
+	sb.WriteString("# HELP gala_uptime_seconds Server uptime in seconds.\n")
+	sb.WriteString("# TYPE gala_uptime_seconds gauge\n")
+	sb.WriteString(fmt.Sprintf("gala_uptime_seconds %.1f\n\n", uptime))
+
+	// Global status code counts
+	sb.WriteString("# HELP gala_responses_total Total responses by status code.\n")
+	sb.WriteString("# TYPE gala_responses_total counter\n")
+	mc.mu.RLock()
+	for code, counter := range mc.statusCounts {
+		sb.WriteString(fmt.Sprintf("gala_responses_total{status=\"%d\"} %d\n", code, atomic.LoadInt64(counter)))
+	}
+	mc.mu.RUnlock()
+	sb.WriteString("\n")
+
+	// Per-route metrics
+	sb.WriteString("# HELP gala_route_requests_total Requests per route.\n")
+	sb.WriteString("# TYPE gala_route_requests_total counter\n")
+	mc.mu.RLock()
+	for route, rm := range mc.routeMetrics {
+		count := atomic.LoadInt64(&rm.Count)
+		sb.WriteString(fmt.Sprintf("gala_route_requests_total{route=\"%s\"} %d\n", route, count))
+	}
+	mc.mu.RUnlock()
+	sb.WriteString("\n")
+
+	sb.WriteString("# HELP gala_route_latency_avg_ms Average latency per route in milliseconds.\n")
+	sb.WriteString("# TYPE gala_route_latency_avg_ms gauge\n")
+	mc.mu.RLock()
+	for route, rm := range mc.routeMetrics {
+		count := atomic.LoadInt64(&rm.Count)
+		totalNs := atomic.LoadInt64(&rm.TotalNs)
+		if count > 0 {
+			avgMs := float64(totalNs) / float64(count) / 1e6
+			sb.WriteString(fmt.Sprintf("gala_route_latency_avg_ms{route=\"%s\"} %.3f\n", route, avgMs))
+		}
+	}
+	mc.mu.RUnlock()
+	sb.WriteString("\n")
+
+	sb.WriteString("# HELP gala_route_latency_max_ms Max latency per route in milliseconds.\n")
+	sb.WriteString("# TYPE gala_route_latency_max_ms gauge\n")
+	mc.mu.RLock()
+	for route, rm := range mc.routeMetrics {
+		rm.mu.Lock()
+		maxMs := float64(rm.MaxNs) / 1e6
+		rm.mu.Unlock()
+		sb.WriteString(fmt.Sprintf("gala_route_latency_max_ms{route=\"%s\"} %.3f\n", route, maxMs))
+	}
+	mc.mu.RUnlock()
+
+	return sb.String()
+}
+
+// ============================================================================
+// Session Store (concurrent in-memory sessions)
+// ============================================================================
+
+// SessionStore manages in-memory sessions with cookie-based IDs.
+type SessionStore struct {
+	mu       sync.RWMutex
+	sessions map[string]*SessionData
+	secret   string
+}
+
+// SessionData holds per-session key-value pairs.
+type SessionData struct {
+	mu        sync.RWMutex
+	values    map[string]string
+	createdAt time.Time
+	lastAccess time.Time
+}
+
+// NewSessionStore creates a new in-memory session store.
+func NewSessionStore(secret string) *SessionStore {
+	return &SessionStore{
+		sessions: make(map[string]*SessionData),
+		secret:   secret,
+	}
+}
+
+// GenerateSessionID creates a cryptographically random session ID.
+func (ss *SessionStore) GenerateSessionID() string {
+	b := make([]byte, 32)
+	rand.Read(b)
+	return hex.EncodeToString(b)
+}
+
+// GetOrCreate returns the session for the given ID, creating one if it doesn't exist.
+// Returns (session, sessionID, isNew).
+func (ss *SessionStore) GetOrCreate(sessionID string) (*SessionData, string, bool) {
+	if sessionID != "" {
+		ss.mu.RLock()
+		session, ok := ss.sessions[sessionID]
+		ss.mu.RUnlock()
+		if ok {
+			session.mu.Lock()
+			session.lastAccess = time.Now()
+			session.mu.Unlock()
+			return session, sessionID, false
+		}
+	}
+
+	// Create new session
+	newID := ss.GenerateSessionID()
+	session := &SessionData{
+		values:     make(map[string]string),
+		createdAt:  time.Now(),
+		lastAccess: time.Now(),
+	}
+	ss.mu.Lock()
+	ss.sessions[newID] = session
+	ss.mu.Unlock()
+	return session, newID, true
+}
+
+// Get returns a session value.
+func (sd *SessionData) Get(key string) (string, bool) {
+	sd.mu.RLock()
+	v, ok := sd.values[key]
+	sd.mu.RUnlock()
+	return v, ok
+}
+
+// Set sets a session value.
+func (sd *SessionData) Set(key, value string) {
+	sd.mu.Lock()
+	sd.values[key] = value
+	sd.mu.Unlock()
+}
+
+// Delete removes a session value.
+func (sd *SessionData) Delete(key string) {
+	sd.mu.Lock()
+	delete(sd.values, key)
+	sd.mu.Unlock()
+}
+
+// Destroy removes a session from the store.
+func (ss *SessionStore) Destroy(sessionID string) {
+	ss.mu.Lock()
+	delete(ss.sessions, sessionID)
+	ss.mu.Unlock()
+}
+
+// SessionCount returns the number of active sessions.
+func (ss *SessionStore) SessionCount() int {
+	ss.mu.RLock()
+	defer ss.mu.RUnlock()
+	return len(ss.sessions)
+}
+
+// SessionFromContext retrieves a SessionData from a ContextValues store.
+// Returns (session, ok). Used by GALA code to avoid Go type assertions.
+func SessionFromContext(cv *ContextValues) (*SessionData, bool) {
+	raw, ok := cv.Get("_session")
+	if !ok {
+		return nil, false
+	}
+	sd, ok := raw.(*SessionData)
+	return sd, ok
+}
+
+// Cleanup removes sessions older than maxAge.
+func (ss *SessionStore) Cleanup(maxAge time.Duration) int {
+	ss.mu.Lock()
+	defer ss.mu.Unlock()
+	now := time.Now()
+	removed := 0
+	for id, session := range ss.sessions {
+		session.mu.RLock()
+		lastAccess := session.lastAccess
+		session.mu.RUnlock()
+		if now.Sub(lastAccess) > maxAge {
+			delete(ss.sessions, id)
+			removed++
+		}
+	}
+	return removed
+}
+
+// ============================================================================
+// Sliding Window Rate Limiter
+// ============================================================================
+
+// SlidingWindowLimiter implements a sliding window counter rate limiter.
+// More accurate than token bucket for bursty traffic.
+type SlidingWindowLimiter struct {
+	mu          sync.Mutex
+	maxRequests int
+	windowSize  time.Duration
+	timestamps  []time.Time
+}
+
+// NewSlidingWindowLimiter creates a new sliding window rate limiter.
+func NewSlidingWindowLimiter(maxRequests int, windowSize time.Duration) *SlidingWindowLimiter {
+	return &SlidingWindowLimiter{
+		maxRequests: maxRequests,
+		windowSize:  windowSize,
+		timestamps:  make([]time.Time, 0, maxRequests),
+	}
+}
+
+// Allow checks if a request should be allowed and records it if so.
+func (sw *SlidingWindowLimiter) Allow() bool {
+	sw.mu.Lock()
+	defer sw.mu.Unlock()
+
+	now := time.Now()
+	cutoff := now.Add(-sw.windowSize)
+
+	// Remove expired timestamps
+	valid := 0
+	for _, ts := range sw.timestamps {
+		if ts.After(cutoff) {
+			sw.timestamps[valid] = ts
+			valid++
+		}
+	}
+	sw.timestamps = sw.timestamps[:valid]
+
+	if len(sw.timestamps) >= sw.maxRequests {
+		return false
+	}
+
+	sw.timestamps = append(sw.timestamps, now)
+	return true
+}
+
+// PerIPSlidingWindowLimiter implements per-IP sliding window rate limiting.
+type PerIPSlidingWindowLimiter struct {
+	mu          sync.RWMutex
+	limiters    map[string]*SlidingWindowLimiter
+	maxRequests int
+	windowSize  time.Duration
+}
+
+// NewPerIPSlidingWindowLimiter creates a per-IP sliding window rate limiter.
+func NewPerIPSlidingWindowLimiter(maxRequests int, windowSize time.Duration) *PerIPSlidingWindowLimiter {
+	return &PerIPSlidingWindowLimiter{
+		limiters:    make(map[string]*SlidingWindowLimiter),
+		maxRequests: maxRequests,
+		windowSize:  windowSize,
+	}
+}
+
+// AllowIP checks if a request from the given IP should be allowed.
+func (pl *PerIPSlidingWindowLimiter) AllowIP(ip string) bool {
+	pl.mu.RLock()
+	limiter, ok := pl.limiters[ip]
+	pl.mu.RUnlock()
+
+	if !ok {
+		pl.mu.Lock()
+		limiter, ok = pl.limiters[ip]
+		if !ok {
+			limiter = NewSlidingWindowLimiter(pl.maxRequests, pl.windowSize)
+			pl.limiters[ip] = limiter
+		}
+		pl.mu.Unlock()
+	}
+
+	return limiter.Allow()
+}

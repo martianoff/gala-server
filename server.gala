@@ -122,6 +122,17 @@ func (s Server) WithErrorMapper(mapper ErrorMapper) Server =
 func (s Server) WithWarmup(handler func()) Server =
     s.copy(wu = Some(handler))
 
+// WithMetricsEndpoint registers a Prometheus-compatible metrics endpoint at the given path.
+// Requires a Metrics collector — also add MetricsFilter() as a global filter.
+//
+//   val stats = NewMetrics()
+//   NewServer().
+//       WithFilter(MetricsFilter(stats)).
+//       WithMetricsEndpoint("/metrics", stats).
+//       GET("/hello", (req) => Ok("hello"))
+func (s Server) WithMetricsEndpoint(path string, m Metrics) Server =
+    s.GET(path, metricsHandler(m))
+
 // Render renders a template using the registered Renderer and returns an HTML response.
 // Equivalent to Echo's c.Render().
 func (s Server) Render(name string, data any) Response =
