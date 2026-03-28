@@ -150,16 +150,14 @@ func KeyAuth(keyLookup string, validate func(string) bool) Filter =
     }
 
 func extractKey(req Request, keyLookup string) Option[string] {
-    val parts = strings.SplitN(keyLookup, ":", 2)
-    if len(parts) != 2 {
+    val parts = ArrayOf(strings.SplitN(keyLookup, ":", 2)...)
+    if parts.Size() != 2 {
         return None[string]()
     }
-    val source = parts[0]
-    val name = parts[1]
-    return source match {
-        case "header" => req.Header(name)
-        case "query" => req.QueryParam(name)
-        case "cookie" => req.Cookie(name)
+    return parts.Get(0) match {
+        case "header" => req.Header(parts.Get(1))
+        case "query" => req.QueryParam(parts.Get(1))
+        case "cookie" => req.Cookie(parts.Get(1))
         case _ => None[string]()
     }
 }
@@ -271,28 +269,18 @@ func SecureWithConfig(
     xFrameOptions string = "SAMEORIGIN",
     hstsMaxAge int = 0,
     contentSecurityPolicy string = "",
-    referrerPolicy string = "") Filter =
+    referrerPolicy string = "",
+) Filter =
     (req Request, next Handler) => next(req).Map((resp) => {
-        var r = resp
-        if xssProtection != "" {
-            r = r.WithHeader("X-XSS-Protection", xssProtection)
-        }
-        if contentTypeNosniff != "" {
-            r = r.WithHeader("X-Content-Type-Options", contentTypeNosniff)
-        }
-        if xFrameOptions != "" {
-            r = r.WithHeader("X-Frame-Options", xFrameOptions)
-        }
-        if hstsMaxAge > 0 {
-            r = r.WithHeader("Strict-Transport-Security", s"max-age=$hstsMaxAge; includeSubDomains")
-        }
-        if contentSecurityPolicy != "" {
-            r = r.WithHeader("Content-Security-Policy", contentSecurityPolicy)
-        }
-        if referrerPolicy != "" {
-            r = r.WithHeader("Referrer-Policy", referrerPolicy)
-        }
-        return r
+        val hstsValue = if (hstsMaxAge > 0) s"max-age=$hstsMaxAge; includeSubDomains" else ""
+        return ArrayOf(
+            ("X-XSS-Protection", xssProtection),
+            ("X-Content-Type-Options", contentTypeNosniff),
+            ("X-Frame-Options", xFrameOptions),
+            ("Strict-Transport-Security", hstsValue),
+            ("Content-Security-Policy", contentSecurityPolicy),
+            ("Referrer-Policy", referrerPolicy),
+        ).Filter((p) => p.V2 != "").FoldLeft(resp, (r, p) => r.WithHeader(p.V1, p.V2))
     })
 
 // ========================
@@ -336,7 +324,7 @@ func CSRF(secret string) Filter {
     return (req Request, next Handler) => {
         // Skip safe methods
         val method = req.Method()
-        if method == GET() || method == HEAD() || method == OPTIONS() {
+        if ArrayOf(GET(), HEAD(), OPTIONS()).Contains(method) {
             // Generate token and store in context for templates
             val token = signer.GenerateToken()
             req.CtxSet("csrf-token", token)
@@ -496,6 +484,10 @@ func Decompress() Filter =
 // JWT Authentication Filter
 // ========================
 
+func setClaimIfPresent(req Request, key string, value string) {
+    if value != "" { req.CtxSet(key, value) }
+}
+
 // JWTAuth returns a filter that validates JWT (HMAC-SHA256) Bearer tokens.
 // On success, stores claims in request context: "jwt-sub", "jwt-iss", etc.
 // secret is the HMAC signing key.
@@ -512,17 +504,13 @@ func JWTAuthWithConfig(secret string, checkExpiry bool) Filter =
         val result = httpcore.ParseAndValidateJWT(token, secret, checkExpiry)
         if result.Valid {
             val claims = result.Claims
-            val sub = claims.Get("sub")
-            if sub != "" { req.CtxSet("jwt-sub", sub) }
-            val iss = claims.Get("iss")
-            if iss != "" { req.CtxSet("jwt-iss", iss) }
-            val aud = claims.Get("aud")
-            if aud != "" { req.CtxSet("jwt-aud", aud) }
+            setClaimIfPresent(req, "jwt-sub", claims.Get("sub"))
+            setClaimIfPresent(req, "jwt-iss", claims.Get("iss"))
+            setClaimIfPresent(req, "jwt-aud", claims.Get("aud"))
             req.CtxSet("jwt-claims", claims)
             return next(req)
         }
-        val errMsg = result.Error
-        return FutureOf(Unauthorized(s"Invalid token: $errMsg"))
+        return FutureOf(Unauthorized(s"Invalid token: ${result.Error}"))
     }
 
 // ========================
@@ -568,12 +556,8 @@ func Rewrite(rules Array[Tuple[string, string]]) Filter =
     (req Request, next Handler) => {
         val path = req.Path()
         val matched = rules.Find((rule) => httpcore.MatchRewriteRule(path, rule.V1))
-        if matched.IsDefined() {
-            val rule = matched.Get()
-            val newPath = httpcore.ApplyRewriteRule(path, rule.V1, rule.V2)
-            req.CtxSet("_rewritten_path", newPath)
-            return next(req)
-        }
+        matched.ForEach((rule) =>
+            req.CtxSet("_rewritten_path", httpcore.ApplyRewriteRule(path, rule.V1, rule.V2)))
         return next(req)
     }
 

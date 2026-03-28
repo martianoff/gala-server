@@ -351,7 +351,7 @@ sealed type HTTPError {
 
 ```gala
 NewHTTPError(StatusNotFound(), "user not found")
-NewHTTPErrorWithInternal(StatusInternalError(), "db failed", dbErr)
+NewHTTPError(StatusInternalError(), "db failed", dbErr)
 ```
 
 ### Methods

@@ -44,17 +44,22 @@ func NewSessions(secret string) Sessions = Sessions(
     HttpOnly = true,
 )
 
+// copy returns a new Sessions with overridden fields (private, used by builder methods).
+func (s Sessions) copy(
+    cookieName string = s.CookieName,
+    maxAge int = s.MaxAge,
+    secure bool = s.Secure,
+    httpOnly bool = s.HttpOnly,
+) Sessions = Sessions(store = s.store, CookieName = cookieName, MaxAge = maxAge, Secure = secure, HttpOnly = httpOnly)
+
 // WithCookieName returns a copy with a custom cookie name.
-func (s Sessions) WithCookieName(name string) Sessions =
-    Sessions(store = s.store, CookieName = name, MaxAge = s.MaxAge, Secure = s.Secure, HttpOnly = s.HttpOnly)
+func (s Sessions) WithCookieName(name string) Sessions = s.copy(cookieName = name)
 
 // WithMaxAge returns a copy with a custom max age (seconds).
-func (s Sessions) WithMaxAge(maxAge int) Sessions =
-    Sessions(store = s.store, CookieName = s.CookieName, MaxAge = maxAge, Secure = s.Secure, HttpOnly = s.HttpOnly)
+func (s Sessions) WithMaxAge(maxAge int) Sessions = s.copy(maxAge = maxAge)
 
 // WithSecure returns a copy with the Secure flag set.
-func (s Sessions) WithSecure(secure bool) Sessions =
-    Sessions(store = s.store, CookieName = s.CookieName, MaxAge = s.MaxAge, Secure = secure, HttpOnly = s.HttpOnly)
+func (s Sessions) WithSecure(secure bool) Sessions = s.copy(secure = secure)
 
 // SessionCount returns the number of active sessions.
 func (s Sessions) SessionCount() int = s.store.SessionCount()

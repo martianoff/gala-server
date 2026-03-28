@@ -46,55 +46,43 @@ func (r Request) IsTLS() bool = r.bridge.IsTLS()
 // IsWebSocket returns true if this is a WebSocket upgrade request.
 func (r Request) IsWebSocket() bool = r.bridge.IsWebSocket()
 
+// --- Internal Helpers ---
+
+// optionFromString converts an empty string to None, non-empty to Some.
+func optionFromString(s string) Option[string] =
+    if (s == "") None[string]() else Some(s)
+
+// optionFromBool converts a Go (value, ok) pair to Option.
+func optionFromBool(v string, ok bool) Option[string] =
+    if (ok) Some(v) else None[string]()
+
 // --- Path Parameters ---
 
 // Param returns a path parameter by name.
 // Example: for pattern "/users/{id}", req.Param("id") returns Some("123").
-func (r Request) Param(name string) Option[string] {
-    val v = r.bridge.PathValue(name)
-    if v == "" {
-        return None[string]()
-    }
-    return Some(v)
-}
+func (r Request) Param(name string) Option[string] =
+    optionFromString(r.bridge.PathValue(name))
 
 // ParamInt returns a path parameter as an int.
-func (r Request) ParamInt(name string) Option[int] {
-    val v = r.bridge.PathValue(name)
-    if v == "" {
-        return None[int]()
-    }
-    return Try(() => strconv.Atoi(v)).ToOption()
-}
+func (r Request) ParamInt(name string) Option[int] =
+    optionFromString(r.bridge.PathValue(name)).FlatMap((v) =>
+        Try(() => strconv.Atoi(v)).ToOption())
 
 // ParamInt64 returns a path parameter as an int64.
-func (r Request) ParamInt64(name string) Option[int64] {
-    val v = r.bridge.PathValue(name)
-    if v == "" {
-        return None[int64]()
-    }
-    return Try(() => strconv.ParseInt(v, 10, 64)).ToOption()
-}
+func (r Request) ParamInt64(name string) Option[int64] =
+    optionFromString(r.bridge.PathValue(name)).FlatMap((v) =>
+        Try(() => strconv.ParseInt(v, 10, 64)).ToOption())
 
 // --- Query Parameters ---
 
 // QueryParam returns a single query parameter by name.
-func (r Request) QueryParam(name string) Option[string] {
-    val v = r.bridge.QueryValue(name)
-    if v == "" {
-        return None[string]()
-    }
-    return Some(v)
-}
+func (r Request) QueryParam(name string) Option[string] =
+    optionFromString(r.bridge.QueryValue(name))
 
 // QueryParamInt returns a query parameter as an int.
-func (r Request) QueryParamInt(name string) Option[int] {
-    val v = r.bridge.QueryValue(name)
-    if v == "" {
-        return None[int]()
-    }
-    return Try(() => strconv.Atoi(v)).ToOption()
-}
+func (r Request) QueryParamInt(name string) Option[int] =
+    optionFromString(r.bridge.QueryValue(name)).FlatMap((v) =>
+        Try(() => strconv.Atoi(v)).ToOption())
 
 // QueryParamDefault returns a query parameter, falling back to a default.
 func (r Request) QueryParamDefault(name string, default_ string) string =
@@ -104,26 +92,17 @@ func (r Request) QueryParamDefault(name string, default_ string) string =
 // Useful for repeated parameters like ?tag=a&tag=b.
 func (r Request) QueryParams(name string) Array[string] {
     val qp = r.bridge.AllQueryParams()
-    if qp == nil {
-        return EmptyArray[string]()
-    }
+    if qp == nil { return EmptyArray[string]() }
     val values = qp[name]
-    if values == nil {
-        return EmptyArray[string]()
-    }
+    if values == nil { return EmptyArray[string]() }
     return ArrayOf(values...)
 }
 
 // --- Headers ---
 
 // Header returns a header value by name (case-insensitive).
-func (r Request) Header(name string) Option[string] {
-    val v = r.bridge.HeaderValue(name)
-    if v == "" {
-        return None[string]()
-    }
-    return Some(v)
-}
+func (r Request) Header(name string) Option[string] =
+    optionFromString(r.bridge.HeaderValue(name))
 
 // ContentType returns the Content-Type header value.
 func (r Request) ContentType() Option[string] = r.Header("Content-Type")
@@ -150,10 +129,8 @@ func (r Request) AcceptsXML() bool = r.Accepts("application/xml")
 // Deadline returns the Go context deadline if set, or None if no deadline.
 func (r Request) Deadline() Option[time.Time] {
     val t, ok = r.bridge.ContextDeadline()
-    if !ok {
-        return None[time.Time]()
-    }
-    return Some(t)
+    if ok { return Some(t) }
+    return None[time.Time]()
 }
 
 // IsCancelled returns true if the request's Go context has been cancelled.
@@ -162,24 +139,15 @@ func (r Request) IsCancelled() bool = r.bridge.ContextDone()
 // --- Form Data ---
 
 // FormValue returns a form value by name (works for both URL-encoded and multipart).
-func (r Request) FormValue(name string) Option[string] {
-    val v = r.bridge.FormValue(name)
-    if v == "" {
-        return None[string]()
-    }
-    return Some(v)
-}
+func (r Request) FormValue(name string) Option[string] =
+    optionFromString(r.bridge.FormValue(name))
 
 // FormParams returns all form values for a given name.
 func (r Request) FormParams(name string) Array[string] {
     val fp = r.bridge.AllFormParams()
-    if fp == nil {
-        return EmptyArray[string]()
-    }
+    if fp == nil { return EmptyArray[string]() }
     val values = fp[name]
-    if values == nil {
-        return EmptyArray[string]()
-    }
+    if values == nil { return EmptyArray[string]() }
     return ArrayOf(values...)
 }
 
@@ -188,10 +156,7 @@ func (r Request) FormParams(name string) Array[string] {
 // Cookie returns a cookie value by name.
 func (r Request) Cookie(name string) Option[string] {
     val v, ok = r.bridge.CookieValue(name)
-    if !ok {
-        return None[string]()
-    }
-    return Some(v)
+    return optionFromBool(v, ok)
 }
 
 // --- JSON Body Parsing (Bind) ---
@@ -215,19 +180,14 @@ func JsonBody[T any](r Request, codec JsonEncoder[T]) Try[T] =
 // CtxGet retrieves a string value from the per-request context.
 func (r Request) CtxGet(key string) Option[string] {
     val v, ok = r.bridge.CtxValues().GetString(key)
-    if !ok {
-        return None[string]()
-    }
-    return Some(v)
+    return optionFromBool(v, ok)
 }
 
 // CtxGetInt retrieves an int value from the per-request context.
 func (r Request) CtxGetInt(key string) Option[int] {
     val v, ok = r.bridge.CtxValues().GetInt(key)
-    if !ok {
-        return None[int]()
-    }
-    return Some(v)
+    if ok { return Some(v) }
+    return None[int]()
 }
 
 // CtxSet stores a value in the per-request context.

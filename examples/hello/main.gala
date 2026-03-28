@@ -41,13 +41,11 @@ func userDetailHandler(req Request) Response {
     return JsonResponse(s"{\"id\": \"$id\", \"name\": \"User $id\"}")
 }
 
-func createUserHandler(req Request) Response {
-    val body = req.Body()
-    if body == "" {
-        return BadRequest("Request body is required")
+func createUserHandler(req Request) Response =
+    req.Body() match {
+        case "" => BadRequest("Request body is required")
+        case body => Created(body).WithHeader("Content-Type", "application/json")
     }
-    return Created(body).WithHeader("Content-Type", "application/json")
-}
 
 func searchHandler(req Request) Response {
     val q = req.QueryParamDefault("q", "*")
