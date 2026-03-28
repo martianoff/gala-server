@@ -1,0 +1,44 @@
+package server
+
+import (
+    . "martianoff/gala/collection_immutable"
+    "github.com/martianoff/gala-server/httpcore"
+)
+
+// ============================================================================
+// Server-Sent Events (SSE)
+// ============================================================================
+//
+// SSE enables one-way server-to-client streaming over HTTP.
+//
+// Example:
+//   val events = ArrayOf(
+//       SSEEvent(Event = "message", Data = "Hello!", Id = "1", Retry = 0),
+//       SSEEvent(Event = "update", Data = "{\"count\": 42}", Id = "2", Retry = 0),
+//   )
+//   return SSE(events)
+
+// SSEEvent represents a single Server-Sent Event.
+struct SSEEvent(Event string, Data string, Id string, Retry int)
+
+// SSE creates an SSE response from an array of events.
+// Sets Content-Type to text/event-stream with appropriate caching headers.
+func SSE(events Array[SSEEvent]) Response {
+    val goEvents = events.Map((e) => httpcore.SSEEvent{
+        Event: e.Event,
+        Data:  e.Data,
+        Id:    e.Id,
+        Retry: e.Retry,
+    }).ToGoSlice()
+    val br = httpcore.NewSSEResponse(goEvents)
+    // Build Response from bridge response
+    return NewResponse(StatusOk()).WithBody(br.Body).
+        WithHeader("Content-Type", "text/event-stream").
+        WithHeader("Cache-Control", "no-cache").
+        WithHeader("Connection", "keep-alive")
+}
+
+// SSEStream creates a simple SSE response with a single event.
+// Convenience for streaming a single event type with data.
+func SSEStream(eventType string, data string) Response =
+    SSE(ArrayOf(SSEEvent(Event = eventType, Data = data, Id = "", Retry = 0)))

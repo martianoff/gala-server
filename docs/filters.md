@@ -12,7 +12,7 @@ Filters can be applied at three granularity levels:
 
 ### 1. Per-Route
 
-Pass filters directly to the HTTP method — they apply only to that route:
+Pass filters directly to the HTTP method -- they apply only to that route:
 
 ```gala
 server.GET("/admin", adminHandler, Auth())
@@ -35,7 +35,7 @@ val server = NewServer().
 
 ### 3. Global
 
-Add filters directly to the Server — they apply to every route:
+Add filters directly to the Server -- they apply to every route:
 
 ```gala
 val server = NewServer().
@@ -57,6 +57,50 @@ server.
 ```
 
 For a request, the chain is: Logger -> Recovery -> Cors -> Handler -> Cors -> Recovery -> Logger
+
+## Filter Algebra
+
+gala-server provides combinators for composing and conditionally applying filters.
+
+### ComposeFilters
+
+Composes two filters into one. The outer filter runs first, then delegates to the inner filter which wraps the handler:
+
+```gala
+val secured = ComposeFilters(Auth(), RateLimit(100.0, 10.0))
+
+// Equivalent to applying both filters, but as a single unit:
+server.WithFilter(secured)
+```
+
+### When
+
+Conditionally applies a filter only when the predicate returns true. If the predicate returns false, the handler is called directly:
+
+```gala
+// Only apply auth to non-health-check paths
+val conditionalAuth = When((req) => req.Path() != "/health", Auth())
+
+server.WithFilter(conditionalAuth)
+```
+
+### Skip
+
+Skips applying a filter for specific paths. Useful for excluding health check, readiness, or metrics endpoints:
+
+```gala
+val logExceptHealth = Skip(Logger(), "/health", "/ready", "/metrics")
+
+server.WithFilter(logExceptHealth)
+```
+
+### Use
+
+Sugar for creating an `Array[Filter]` from variadic arguments:
+
+```gala
+val filters = Use(Logger(), Recovery(), Cors())
+```
 
 ## Built-in Filters
 
@@ -155,6 +199,85 @@ WWWRedirect()          // Redirect non-www to www
 NonWWWRedirect()       // Redirect www to non-www
 Rewrite(rules)         // URL path rewriting with wildcard matching
 ```
+
+### ETag
+
+Generates ETags from response body hashes. Supports conditional requests via `If-None-Match` -- returns 304 Not Modified when the client already has the current version:
+
+```gala
+server.WithFilter(ETag())
+```
+
+When a request includes `If-None-Match` with a matching ETag, the filter short-circuits and returns a 304 response with no body, saving bandwidth.
+
+### Cache-Control / NoCacheFilter
+
+Control caching behavior on responses:
+
+```gala
+// Set Cache-Control: public, max-age=3600 (1 hour)
+server.WithFilter(CacheControl(3600))
+
+// Disable caching entirely:
+// Cache-Control: no-cache, no-store, must-revalidate
+// Pragma: no-cache
+// Expires: 0
+server.WithFilter(NoCacheFilter())
+```
+
+### Circuit Breaker
+
+Implements the circuit breaker pattern to protect against cascading failures:
+
+```gala
+server.WithFilter(CircuitBreaker(
+    maxFailures = 5,
+    resetTimeout = 30 * time.Second,
+    halfOpenMax = 1,
+))
+```
+
+The circuit breaker has three states:
+
+1. **Closed** (normal) -- requests pass through normally. Each 5xx response or handler failure increments the failure counter. When failures reach `maxFailures`, the circuit transitions to Open.
+
+2. **Open** (tripped) -- all requests are immediately rejected with 503 Service Unavailable. After `resetTimeout` elapses, the circuit transitions to Half-Open.
+
+3. **Half-Open** (probing) -- allows up to `halfOpenMax` requests through as probes. If a probe succeeds, the circuit closes (resets failure count). If a probe fails, the circuit re-opens.
+
+This prevents a failing service from being overwhelmed with requests and allows automatic recovery.
+
+### Retry / RetryWithBackoff
+
+Retry failed requests with configurable backoff strategies:
+
+```gala
+// Fixed backoff: wait 100ms between each retry
+server.WithFilter(Retry(maxRetries = 3, backoff = 100 * time.Millisecond))
+
+// Exponential backoff: 100ms -> 200ms -> 400ms -> ... capped at 5s
+server.WithFilter(RetryWithBackoff(
+    maxRetries = 3,
+    initialBackoff = 100 * time.Millisecond,
+    maxBackoff = 5 * time.Second,
+))
+```
+
+Both retry on 5xx responses or handler failures. The handler is re-invoked up to `maxRetries` additional times. After all retries are exhausted, the last response or error is returned.
+
+**RetryWithBackoff** doubles the wait time after each attempt (exponential backoff), capped at `maxBackoff`. This reduces pressure on struggling services.
+
+### Bulkhead (Concurrency Limiter)
+
+Limits the number of concurrent in-flight requests using a semaphore:
+
+```gala
+server.WithFilter(Bulkhead(maxConcurrent = 100))
+```
+
+When the number of concurrent requests reaches `maxConcurrent`, new requests are immediately rejected with 503 Service Unavailable. The semaphore slot is released when the handler completes, whether it succeeds or fails.
+
+This prevents any single service from consuming all available resources and provides backpressure to callers.
 
 ## Writing Custom Filters
 

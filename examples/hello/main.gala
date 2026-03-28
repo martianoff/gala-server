@@ -6,114 +6,224 @@ import (
     "time"
 )
 
+// =============================================================================
+// GALA Server — Full Feature Demo
+// =============================================================================
+//
+// Run:   bazel run //examples/hello
+// Test:  See curl commands at the bottom of this file
+//
+// This example demonstrates:
+//   - Immutable server builder with fluent API
+//   - Sealed types for HTTP methods and status codes
+//   - Route groups with scoped filters
+//   - 15+ built-in filters (Logger, Recovery, CORS, Auth, JWT, RateLimit, etc.)
+//   - Content negotiation
+//   - SSE (Server-Sent Events)
+//   - Type-safe extractors
+//   - Health check and readiness endpoints
+//   - Base path / API versioning
+//   - Named routes and URL generation
+//   - Graceful shutdown
+
+// --- Handlers ---
+
+func homeHandler(req Request) Response = Ok("Welcome to GALA Server!")
+
+func userListHandler(req Request) Response {
+    val page = QueryInt(req, "page", 1)
+    val limit = QueryInt(req, "limit", 10)
+    return JsonResponse(s"{\"users\": [], \"page\": $page, \"limit\": $limit}")
+}
+
+func userDetailHandler(req Request) Response {
+    val id = req.Param("id").GetOrElse("0")
+    return JsonResponse(s"{\"id\": \"$id\", \"name\": \"User $id\"}")
+}
+
+func createUserHandler(req Request) Response {
+    val body = req.Body()
+    if body == "" {
+        return BadRequest("Request body is required")
+    }
+    return Created(body).WithHeader("Content-Type", "application/json")
+}
+
+func searchHandler(req Request) Response {
+    val q = req.QueryParamDefault("q", "*")
+    val page = QueryInt(req, "page", 1)
+    return JsonResponse(s"{\"query\": \"$q\", \"page\": $page, \"results\": []}")
+}
+
+func echoHandler(req Request) Response {
+    val body = req.Body()
+    val method = req.Method().Name()
+    val ct = req.ContentType().GetOrElse("none")
+    return JsonResponse(s"{\"method\": \"$method\", \"contentType\": \"$ct\", \"body\": \"$body\"}")
+}
+
+func negotiateJsonHandler() Response =
+    JsonResponse("{\"message\": \"hello\", \"format\": \"json\"}")
+
+func negotiateHtmlHandler() Response =
+    Html("<h1>Hello</h1><p>format: html</p>")
+
+func negotiateTextHandler() Response =
+    Text("hello (format: text)")
+
+func negotiateHandler(req Request) Response =
+    Negotiate(req, negotiateJsonHandler, negotiateHtmlHandler, negotiateTextHandler)
+
+func sseHandler(req Request) Response =
+    SSE(ArrayOf(
+        SSEEvent(Event = "message", Data = "{\"text\": \"Hello!\"}", Id = "1", Retry = 0),
+        SSEEvent(Event = "update", Data = "{\"count\": 42}", Id = "2", Retry = 0),
+    ))
+
+func cookieHandler(req Request) Response {
+    val visits = req.Cookie("visits").GetOrElse("0")
+    return Ok(s"Visits: $visits").
+        SetCookie("visits", "incremented").
+        SetSecureCookie("session", "abc123", 3600)
+}
+
+func textHandler(req Request) Response = Text("plain text response")
+
+func htmlHandler(req Request) Response = Html("<h1>Hello GALA</h1><p>HTML response</p>")
+
+func xmlHandler(req Request) Response = Xml("<server><name>GALA</name></server>")
+
+func jsonpHandler(req Request) Response {
+    val cb = req.QueryParamDefault("callback", "handleData")
+    return JSONP(cb, "{\"data\": \"hello\"}")
+}
+
 func main() {
-    // API group — Auth filter applies to all routes in this group
-    val api = NewGroup().
-        GET("/users", (req) => {
-            val page = req.QueryParamDefault("page", "1")
-            return JsonResponse(s"{\"users\": [], \"page\": $page}")
-        }).
-        GET("/users/{id}", (req) => {
-            val id = req.Param("id").GetOrElse("0")
-            return JsonResponse(s"{\"id\": \"$id\"}")
-        }).
-        POST("/users", (req) =>
-            req.Body() match {
-                case "" => NewHTTPError(StatusBadRequest(), "body required").ToJsonResponse()
-                case body => Created(body)
-            }).
-        POST("/echo", (req) => {
-            val body = req.Body()
-            return JsonResponse(s"{\"echo\": \"$body\"}")
-        }).
+    // --- Route Groups ---
+
+    // Public API — no auth required
+    val publicApi = NewGroup().
+        GET("/search", searchHandler).
+        GET("/negotiate", negotiateHandler).
+        GET("/sse", sseHandler)
+
+    // Users API — requires auth header
+    val usersApi = NewGroup().
+        GET("/users", userListHandler).
+        GET("/users/{id}", userDetailHandler).
+        POST("/users", createUserHandler).
+        POST("/echo", echoHandler).
         WithFilter(Auth())
 
-    // Admin group with bearer token and security headers
-    val admin = NewGroup().
-        GET("/stats", (req) => {
-            val user = req.CtxGet("user").GetOrElse("anonymous")
-            return JsonResponse(s"{\"admin\": \"$user\", \"uptime\": \"24h\"}")
-        }).
+    // Admin API — requires bearer token + security headers
+    val adminApi = NewGroup().
+        GET("/stats", (req) => JsonResponse("{\"admin\": true, \"uptime\": \"24h\"}")).
+        GET("/config", (req) => JsonResponse("{\"debug\": true, \"version\": \"0.1.0\"}")).
         WithFilter(AuthBearer((token) => token == "admin-secret")).
         WithFilter(Secure())
 
-    // Build the server with full framework features:
-    //
-    //   Per-route:  Auth() on /secret only, BasicAuth on /basic
-    //   Group:      Auth() on /api/v1/* (from api group)
-    //   Group:      AuthBearer() + Secure() on /admin/* (from admin group)
-    //   Global:     Logger, Recovery, Cors, RateLimit, RequestId on ALL routes
-    //
-    //   Named routes: "home" -> /, "health" -> /health, "search" -> /search
-    //   Middleware: MethodOverride (override POST to PUT/DELETE via header)
-    //   Response types: JSON, HTML, Text, JSONP, Stream
-    //   HTTPError: Structured error responses
+    // --- Server Assembly ---
+
     val server = NewServer().
-        WithName("GALA Full API").
+        WithName("GALA Full Demo").
         WithPort(8080).
+        WithBasePath("/api").
         WithShutdownTimeout(15 * time.Second).
         WithDebug(true).
+        // Error handling
         WithErrorHandler((err) => NewHTTPError(StatusInternalError(), s"$err").ToJsonResponse()).
         WithNotFound((req) => NewHTTPError(StatusNotFound(), s"${req.Method().Name()} ${req.Path()} not found").ToJsonResponse()).
+        // Warmup
+        WithWarmup(() => Println("   Warming up...")).
+        // Health & readiness
+        WithHealthCheck("/health").
+        WithReadiness("/ready", () => true).
         // Named routes
-        GET("/", (req) => Ok("Hello, GALA!")).Named("home").
-        GET("/health", (req) => JsonResponse("{\"status\": \"ok\"}")).Named("health").
-        // Search with query params
-        GET("/search", (req) => {
-            val q = req.QueryParam("q").GetOrElse("*")
-            val page = req.QueryParamInt("page").GetOrElse(1)
-            return JsonResponse(s"{\"query\": \"$q\", \"page\": $page}")
-        }).Named("search").
-        // JSONP endpoint
-        GET("/jsonp", (req) => {
-            val callback = req.QueryParamDefault("callback", "jsonpCallback")
-            return JSONP(callback, "{\"data\": \"hello\"}")
-        }).
-        // Cookie demo
-        GET("/cookie-demo", (req) => {
-            val visits = req.Cookie("visits").GetOrElse("0")
-            return Ok(s"Visits: $visits").
-                SetCookie("visits", "incremented").
-                SetSecureCookie("session", "abc123", 3600)
-        }).
-        // Server-Sent Events (stream)
-        GET("/events", (req) =>
-            Stream(StatusOk(), "text/event-stream", "data: {\"type\": \"ping\"}\n\n")).
-        // Content type variants
-        GET("/text", (req) => Text("plain text")).
-        GET("/html", (req) => Html("<h1>Hello GALA</h1>")).
-        GET("/xml", (req) => Xml("<server><name>GALA</name></server>")).
-        // Protected routes
+        GET("/", homeHandler).Named("home").
+        GET("/cookies", cookieHandler).Named("cookies").
+        // Content types
+        GET("/text", textHandler).
+        GET("/html", htmlHandler).
+        GET("/xml", xmlHandler).
+        GET("/jsonp", jsonpHandler).
+        // Per-route auth
         GET("/secret", (req) => Ok("secret data"), Auth()).
         GET("/basic", (req) => {
             val user = req.CtxGet("username").GetOrElse("anonymous")
-            return Ok(s"Hello, $user")
+            return Ok(s"Hello, $user!")
         }, BasicAuth((u, p) => u == "admin" && p == "password")).
-        // API key auth
-        GET("/api-key", (req) => Ok("authenticated"),
+        GET("/api-key", (req) => Ok("API key authenticated"),
             KeyAuth("header:X-API-Key", (key) => key == "my-secret-key")).
+        // Groups
+        Group("/public", publicApi).
+        Group("/v1", usersApi).
+        Group("/admin", adminApi).
         // Static files
         Static("/public/", "./static").
-        // Groups
-        Group("/api/v1", api).
-        Group("/admin", admin).
-        // URL rewriting
-        WithFilter(Rewrite(ArrayOf(("/v1/*", "/api/v1/$1")))).
-        // Global middleware stack
+        // Global filter stack
         WithFilter(Logger()).
         WithFilter(Recovery()).
         WithFilter(Cors()).
         WithFilter(RateLimit(1000.0, 100.0)).
         WithFilter(RequestId()).
         WithFilter(MethodOverride()).
-        WithFilter(BodyLimit("10M"))
+        WithFilter(BodyLimit("10M")).
+        WithFilter(ETag())
 
-    // URL generation from named routes
+    // --- Startup Info ---
     Println(s"Home URL: ${server.URL("home").GetOrElse("???")}")
-    Println(s"Search URL: ${server.URL("search").GetOrElse("???")}")
-    Println(s"Routes registered: ${server.RouteCount()}")
-    Println(s"Filters registered: ${server.FilterCount()}")
+    Println(s"Routes: ${server.RouteCount()}, Filters: ${server.FilterCount()}")
 
-    // Start with graceful shutdown (responds to SIGINT/SIGTERM)
+    // Start with graceful shutdown (Ctrl+C to stop)
     server.ListenGraceful()
 }
+
+// =============================================================================
+// Test Commands (run in another terminal after starting the server)
+// =============================================================================
+//
+// --- Basic Routes ---
+// curl http://localhost:8080/api/
+// curl http://localhost:8080/api/health
+// curl http://localhost:8080/api/ready
+// curl http://localhost:8080/api/text
+// curl http://localhost:8080/api/html
+// curl http://localhost:8080/api/xml
+// curl http://localhost:8080/api/jsonp?callback=myFunc
+// curl http://localhost:8080/api/cookies
+//
+// --- Content Negotiation ---
+// curl -H "Accept: application/json" http://localhost:8080/api/public/negotiate
+// curl -H "Accept: text/html" http://localhost:8080/api/public/negotiate
+// curl -H "Accept: text/plain" http://localhost:8080/api/public/negotiate
+//
+// --- Search ---
+// curl "http://localhost:8080/api/public/search?q=gala&page=2"
+//
+// --- SSE ---
+// curl http://localhost:8080/api/public/sse
+//
+// --- Auth Required (401 without header) ---
+// curl http://localhost:8080/api/v1/users
+// curl -H "Authorization: Bearer any-token" http://localhost:8080/api/v1/users
+// curl -H "Authorization: Bearer any-token" http://localhost:8080/api/v1/users/42
+//
+// --- Create User ---
+// curl -X POST -H "Authorization: Bearer x" -d '{"name":"Alice"}' http://localhost:8080/api/v1/users
+//
+// --- Echo ---
+// curl -X POST -H "Authorization: Bearer x" -H "Content-Type: application/json" \
+//      -d '{"test":true}' http://localhost:8080/api/v1/echo
+//
+// --- Per-Route Auth ---
+// curl http://localhost:8080/api/secret                               (401)
+// curl -H "Authorization: any" http://localhost:8080/api/secret       (200)
+// curl -u admin:password http://localhost:8080/api/basic              (200: Hello, admin!)
+// curl -H "X-API-Key: my-secret-key" http://localhost:8080/api/api-key (200)
+//
+// --- Admin (Bearer Token) ---
+// curl http://localhost:8080/api/admin/stats                          (401)
+// curl -H "Authorization: Bearer admin-secret" http://localhost:8080/api/admin/stats  (200)
+//
+// --- 404 ---
+// curl http://localhost:8080/api/nonexistent

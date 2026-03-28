@@ -20,6 +20,7 @@ type Server struct {
     root            Group
     Port            int
     Name            string
+    BasePath        string
     ErrorHandler    func(error) Response
     NotFoundHandler func(Request) Response
     Statics         Array[Tuple[string, string]]
@@ -28,6 +29,8 @@ type Server struct {
     Banner          bool
     renderer        Option[Renderer]
     validator       Option[Validator]
+    errorMapper     Option[ErrorMapper]
+    warmup          Option[WarmupFunc]
 }
 
 // NewServer creates an empty Server with default settings (port 8080).
@@ -35,6 +38,7 @@ func NewServer() Server = Server(
     root = NewGroup(),
     Port = 8080,
     Name = "GALA Server",
+    BasePath = "",
     ErrorHandler = defaultErrorHandler,
     NotFoundHandler = defaultNotFoundHandler,
     Statics = EmptyArray[Tuple[string, string]](),
@@ -43,6 +47,8 @@ func NewServer() Server = Server(
     Banner = true,
     renderer = None[Renderer](),
     validator = None[Validator](),
+    errorMapper = None[ErrorMapper](),
+    warmup = None[WarmupFunc](),
 )
 
 func defaultErrorHandler(err error) Response =
@@ -57,6 +63,7 @@ func (s Server) copy(
     root Group = s.root,
     port int = s.Port,
     name string = s.Name,
+    basePath string = s.BasePath,
     errHandler func(error) Response = s.ErrorHandler,
     notFound func(Request) Response = s.NotFoundHandler,
     statics Array[Tuple[string, string]] = s.Statics,
@@ -64,13 +71,20 @@ func (s Server) copy(
     debug bool = s.Debug,
     banner bool = s.Banner,
     rndr Option[Renderer] = s.renderer,
-    vldr Option[Validator] = s.validator) Server = Server(root, port, name, errHandler, notFound, statics, timeout, debug, banner, rndr, vldr)
+    vldr Option[Validator] = s.validator,
+    errMapper Option[ErrorMapper] = s.errorMapper,
+    wu Option[WarmupFunc] = s.warmup,
+) Server = Server(root, port, name, basePath, errHandler, notFound, statics, timeout, debug, banner, rndr, vldr, errMapper, wu)
 
 // WithPort sets the port the server listens on.
 func (s Server) WithPort(port int) Server = s.copy(port = port)
 
 // WithName sets the server name shown in the startup banner.
 func (s Server) WithName(name string) Server = s.copy(name = name)
+
+// WithBasePath sets the base path prefix for all routes.
+// Example: WithBasePath("/api/v1") causes GET("/users", h) to match "/api/v1/users".
+func (s Server) WithBasePath(prefix string) Server = s.copy(basePath = prefix)
 
 // WithErrorHandler sets a custom error handler for unhandled errors.
 func (s Server) WithErrorHandler(handler func(error) Response) Server =
@@ -99,6 +113,15 @@ func (s Server) WithRenderer(r Renderer) Server = s.copy(rndr = Some(r))
 // Equivalent to Echo's e.Validator.
 func (s Server) WithValidator(v Validator) Server = s.copy(vldr = Some(v))
 
+// WithErrorMapper registers an error mapper that converts specific error types to HTTP responses.
+// The mapper returns Some(response) if it can handle the error, None otherwise.
+func (s Server) WithErrorMapper(mapper ErrorMapper) Server =
+    s.copy(errMapper = Some(mapper))
+
+// WithWarmup registers a warmup function that executes before the server starts accepting traffic.
+func (s Server) WithWarmup(handler func()) Server =
+    s.copy(wu = Some(handler))
+
 // Render renders a template using the registered Renderer and returns an HTML response.
 // Equivalent to Echo's c.Render().
 func (s Server) Render(name string, data any) Response =
@@ -106,6 +129,23 @@ func (s Server) Render(name string, data any) Response =
         case Some(r) => Html(r.Render(name, data))
         case None() => InternalError("renderer not registered")
     }
+
+// --- Health Check & Readiness ---
+
+// WithHealthCheck registers a health endpoint at the given path.
+// Returns 200 OK with body "OK" when the server is running.
+func (s Server) WithHealthCheck(path string) Server =
+    s.GET(path, (req Request) => Ok("OK"))
+
+// WithReadiness registers a readiness endpoint with a custom check function.
+// Returns 200 OK if the check returns true, 503 Service Unavailable otherwise.
+func (s Server) WithReadiness(path string, check func() bool) Server =
+    s.GET(path, (req Request) => {
+        if check() {
+            return Ok("READY")
+        }
+        return ServiceUnavailable("NOT READY")
+    })
 
 // --- Static Files ---
 
@@ -200,7 +240,7 @@ func (s Server) FilterCount() int = s.root.FilterCount()
 func (s Server) Routes() Array[string] =
     s.root.Routes.Map((route) => s"${route.Method.Name()} ${route.Pattern}")
 
-// --- Listen ---
+// --- Listen (HTTP) ---
 
 // Listen starts the HTTP server on the configured port.
 func (s Server) Listen() Try[bool] = s.ListenOn(s":${s.Port}")
@@ -208,7 +248,8 @@ func (s Server) Listen() Try[bool] = s.ListenOn(s":${s.Port}")
 // ListenOn starts the HTTP server on the given address.
 func (s Server) ListenOn(addr string) Try[bool] {
     val sb = s.buildServerBuilder()
-    s.printBanner(addr, false)
+    s.runWarmup()
+    s.printBanner(addr, false, false)
     val err = sb.ListenAndServe(addr)
     if err != nil {
         return Failure[bool](err)
@@ -222,8 +263,43 @@ func (s Server) ListenGraceful() Try[bool] = s.ListenGracefulOn(s":${s.Port}")
 // ListenGracefulOn starts the server with graceful shutdown on the given address.
 func (s Server) ListenGracefulOn(addr string) Try[bool] {
     val sb = s.buildServerBuilder()
-    s.printBanner(addr, true)
+    s.runWarmup()
+    s.printBanner(addr, true, false)
     val err = sb.ListenAndServeGraceful(addr, s.ShutdownTimeout)
+    if err != nil {
+        return Failure[bool](err)
+    }
+    return Success(true)
+}
+
+// --- Listen (TLS/HTTPS) ---
+
+// ListenTLS starts the HTTPS server on the configured port with TLS.
+func (s Server) ListenTLS(certFile string, keyFile string) Try[bool] =
+    s.ListenTLSOn(s":${s.Port}", certFile, keyFile)
+
+// ListenTLSOn starts the HTTPS server on the given address with TLS.
+func (s Server) ListenTLSOn(addr string, certFile string, keyFile string) Try[bool] {
+    val sb = s.buildServerBuilder()
+    s.runWarmup()
+    s.printBanner(addr, false, true)
+    val err = sb.ListenAndServeTLS(addr, certFile, keyFile)
+    if err != nil {
+        return Failure[bool](err)
+    }
+    return Success(true)
+}
+
+// ListenGracefulTLS starts the HTTPS server with TLS and graceful shutdown.
+func (s Server) ListenGracefulTLS(certFile string, keyFile string) Try[bool] =
+    s.ListenGracefulTLSOn(s":${s.Port}", certFile, keyFile)
+
+// ListenGracefulTLSOn starts the HTTPS server with TLS and graceful shutdown on the given address.
+func (s Server) ListenGracefulTLSOn(addr string, certFile string, keyFile string) Try[bool] {
+    val sb = s.buildServerBuilder()
+    s.runWarmup()
+    s.printBanner(addr, true, true)
+    val err = sb.ListenAndServeTLSGraceful(addr, certFile, keyFile, s.ShutdownTimeout)
     if err != nil {
         return Failure[bool](err)
     }
@@ -232,29 +308,42 @@ func (s Server) ListenGracefulOn(addr string) Try[bool] {
 
 // --- Internal ---
 
+func (s Server) runWarmup() {
+    s.warmup match {
+        case Some(handler) => handler()
+        case None() => {}
+    }
+}
+
 func (s Server) buildServerBuilder() *httpcore.ServerBuilder {
     val sb = httpcore.NewServerBuilder()
     val errHandler = s.ErrorHandler
+    val errMapper = s.errorMapper
 
     // Register static routes
     s.Statics.ForEach((pair) => sb.AddStatic(pair.V1, pair.V2))
 
-    // Register API routes
+    // Register API routes, prepending BasePath to patterns
     s.root.Routes.ForEach((route) => {
         val handler = applyFilters(route.Handler, s.root.Filters)
-        sb.AddRoute(route.Method.Name(), route.Pattern, makeBridgeHandler(handler, errHandler))
+        val pattern = if (s.BasePath != "") s.BasePath + route.Pattern else route.Pattern
+        sb.AddRoute(route.Method.Name(), pattern, makeBridgeHandler(handler, errHandler, errMapper))
     })
 
     return sb
 }
 
-func (s Server) printBanner(addr string, graceful bool) {
+func (s Server) printBanner(addr string, graceful bool, tls bool) {
     if !s.Banner {
         return
     }
+    val protocol = if (tls) "HTTPS" else "HTTP"
     Println("")
     Println(s"   ${s.Name}")
-    Println(s"   Listening on $addr")
+    Println(s"   $protocol listening on $addr")
+    if s.BasePath != "" {
+        Println(s"   Base path: ${s.BasePath}")
+    }
     if graceful {
         Println(s"   Graceful shutdown: ${s.ShutdownTimeout}")
     }
@@ -269,11 +358,18 @@ func (s Server) printBanner(addr string, graceful bool) {
     Println("")
 }
 
-func makeBridgeHandler(handler Handler, errHandler func(error) Response) httpcore.BridgeHandler =
+func makeBridgeHandler(handler Handler, errHandler func(error) Response, errMapper Option[ErrorMapper]) httpcore.BridgeHandler =
     (br httpcore.BridgeRequest) => {
         val req = Request(bridge = br)
         return handler(req).Await() match {
             case Success(resp) => resp.ToBridge()
-            case Failure(err) => errHandler(err).ToBridge()
+            case Failure(err) => {
+                val mapped = errMapper.FlatMap((mapper) => mapper(err))
+                val resp = mapped match {
+                    case Some(r) => r
+                    case None() => errHandler(err)
+                }
+                return resp.ToBridge()
+            }
         }
     }

@@ -1,0 +1,77 @@
+package server
+
+import (
+    . "martianoff/gala/json"
+    "strconv"
+    "errors"
+)
+
+// ============================================================================
+// Type-Safe Extractors
+// ============================================================================
+//
+// Extractors provide a clean, Try-based API for extracting values from requests.
+// They return Try[T] so handlers can use pattern matching for error handling:
+//
+//   func handler(req Request) Response =
+//       PathParam(req, "id") match {
+//           case Success(id) => Ok(s"User: $id")
+//           case Failure(err) => BadRequest(s"Missing param: $err")
+//       }
+
+// --- Path Parameter Extractors ---
+
+// PathParam extracts a required path parameter by name.
+// Returns Failure if the parameter is missing.
+func PathParam(req Request, name string) Try[string] {
+    val v = req.Param(name)
+    return v match {
+        case Some(s) => Success(s)
+        case None() => Failure[string](errors.New(s"missing path parameter: $name"))
+    }
+}
+
+// PathParamInt extracts a required path parameter as an int.
+// Returns Failure if the parameter is missing or not a valid integer.
+func PathParamInt(req Request, name string) Try[int] {
+    val v = req.Param(name)
+    return v match {
+        case Some(s) => Try(() => strconv.Atoi(s))
+        case None() => Failure[int](errors.New(s"missing path parameter: $name"))
+    }
+}
+
+// --- Query Parameter Extractors ---
+
+// QueryRequired extracts a required query parameter by name.
+// Returns Failure if the parameter is missing.
+func QueryRequired(req Request, name string) Try[string] {
+    val v = req.QueryParam(name)
+    return v match {
+        case Some(s) => Success(s)
+        case None() => Failure[string](errors.New(s"missing required query parameter: $name"))
+    }
+}
+
+// QueryInt extracts a query parameter as an int, returning a default if missing or invalid.
+func QueryInt(req Request, name string, default_ int) int =
+    req.QueryParamInt(name).GetOrElse(default_)
+
+// --- Header Extractors ---
+
+// HeaderRequired extracts a required header by name.
+// Returns Failure if the header is missing.
+func HeaderRequired(req Request, name string) Try[string] {
+    val v = req.Header(name)
+    return v match {
+        case Some(s) => Success(s)
+        case None() => Failure[string](errors.New(s"missing required header: $name"))
+    }
+}
+
+// --- JSON Body Extractor ---
+
+// BodyAs extracts the request body as a typed struct using a JSON codec.
+// Returns Failure if the body cannot be parsed.
+func BodyAs[T any](req Request, codec JsonEncoder[T]) Try[T] =
+    codec.Decode(req.Body())

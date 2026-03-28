@@ -7,6 +7,9 @@ gala_binary(
         "//:gala-server",
     ],
     deps = [
+        "//httpcore",
         "@gala//collection_immutable",
+        "@gala//concurrent",
+        "@gala//json",
     ],
 )

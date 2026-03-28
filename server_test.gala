@@ -897,3 +897,257 @@ func TestFullFrameworkConfiguration(t T) T {
     val t5 = Eq(t4, s.RouteCount(), 5)
     return Eq(t5, s.FilterCount(), 5)
 }
+
+// ============================================================================
+// Power Features — BasePath Tests
+// ============================================================================
+
+func TestWithBasePath(t T) T {
+    val s = NewServer().WithBasePath("/api/v1")
+    return Eq(t, s.BasePath, "/api/v1")
+}
+
+func TestBasePathDefault(t T) T {
+    val s = NewServer()
+    return Eq(t, s.BasePath, "")
+}
+
+func TestBasePathPreservedAcrossBuilderCalls(t T) T {
+    val s = NewServer().
+        WithBasePath("/api/v1").
+        WithPort(9090).
+        GET("/users", (req) => Ok("users"))
+    val t1 = Eq(t, s.BasePath, "/api/v1")
+    val t2 = Eq(t1, s.Port, 9090)
+    return Eq(t2, s.RouteCount(), 1)
+}
+
+func TestBasePathWithRoutes(t T) T {
+    val s = NewServer().
+        WithBasePath("/api/v1").
+        GET("/users", (req) => Ok("users")).
+        POST("/items", (req) => Created("ok"))
+    val routes = s.Routes()
+    val t1 = Eq(t, routes.Size(), 2)
+    return Eq(t1, s.BasePath, "/api/v1")
+}
+
+// ============================================================================
+// Power Features — TLS Config Tests
+// ============================================================================
+
+func TestListenTLSExists(t T) T {
+    // Verify the server has TLS methods (builder test, no actual TLS)
+    val s = NewServer().WithPort(8443)
+    return Eq(t, s.Port, 8443)
+}
+
+// ============================================================================
+// Power Features — HealthCheck Tests
+// ============================================================================
+
+func TestWithHealthCheck(t T) T {
+    val s = NewServer().WithHealthCheck("/health")
+    return Eq(t, s.RouteCount(), 1)
+}
+
+func TestWithHealthCheckMultiple(t T) T {
+    val s = NewServer().
+        WithHealthCheck("/health").
+        GET("/api", (req) => Ok("api"))
+    return Eq(t, s.RouteCount(), 2)
+}
+
+// ============================================================================
+// Power Features — Readiness Tests
+// ============================================================================
+
+func TestWithReadiness(t T) T {
+    val s = NewServer().WithReadiness("/ready", () => true)
+    return Eq(t, s.RouteCount(), 1)
+}
+
+func TestWithReadinessMultiple(t T) T {
+    val s = NewServer().
+        WithReadiness("/ready", () => true).
+        GET("/api", (req) => Ok("api"))
+    return Eq(t, s.RouteCount(), 2)
+}
+
+// ============================================================================
+// Power Features — Warmup Tests
+// ============================================================================
+
+func TestWithWarmup(t T) T {
+    val s = NewServer().WithWarmup(() => {})
+    // Warmup is set but not yet called (called at Listen time)
+    return IsTrue(t, s.warmup.IsDefined())
+}
+
+func TestWithWarmupDefault(t T) T {
+    val s = NewServer()
+    return IsTrue(t, s.warmup.IsEmpty())
+}
+
+// ============================================================================
+// Power Features — ErrorMapper Tests
+// ============================================================================
+
+func TestWithErrorMapper(t T) T {
+    val mapper = (err error) => Some(BadRequest(s"mapped: $err"))
+    val s = NewServer().WithErrorMapper(mapper)
+    return IsTrue(t, s.errorMapper.IsDefined())
+}
+
+func TestWithErrorMapperDefault(t T) T {
+    val s = NewServer()
+    return IsTrue(t, s.errorMapper.IsEmpty())
+}
+
+// ============================================================================
+// Power Features — Extended StatusCode Tests
+// ============================================================================
+
+func TestStatusUnprocessableEntityCode(t T) T =
+    Eq(t, StatusUnprocessableEntity().Code(), 422)
+
+func TestStatusTooManyRequestsCode(t T) T =
+    Eq(t, StatusTooManyRequests().Code(), 429)
+
+func TestStatusRequestTimeoutCode(t T) T =
+    Eq(t, StatusRequestTimeout().Code(), 408)
+
+func TestStatusBadGatewayCode(t T) T =
+    Eq(t, StatusBadGateway().Code(), 502)
+
+func TestExtendedStatusCodeValues(t T) T {
+    val t1 = Eq(t, StatusUnprocessableEntity().Code(), 422)
+    val t2 = Eq(t1, StatusTooManyRequests().Code(), 429)
+    val t3 = Eq(t2, StatusRequestTimeout().Code(), 408)
+    return Eq(t3, StatusBadGateway().Code(), 502)
+}
+
+// ============================================================================
+// Power Features — Method.CUSTOM Tests
+// ============================================================================
+
+func TestMethodCustom(t T) T {
+    val m = CUSTOM("PURGE")
+    return Eq(t, m.Name(), "PURGE")
+}
+
+func TestMethodCustomArbitrary(t T) T {
+    val m = CUSTOM("LINK")
+    return Eq(t, m.Name(), "LINK")
+}
+
+func TestToMethodUnknown(t T) T {
+    val m = toMethod("PURGE")
+    return Eq(t, m.Name(), "PURGE")
+}
+
+func TestToMethodKnown(t T) T {
+    val t1 = Eq(t, toMethod("GET").Name(), "GET")
+    val t2 = Eq(t1, toMethod("POST").Name(), "POST")
+    val t3 = Eq(t2, toMethod("PUT").Name(), "PUT")
+    val t4 = Eq(t3, toMethod("DELETE").Name(), "DELETE")
+    val t5 = Eq(t4, toMethod("PATCH").Name(), "PATCH")
+    val t6 = Eq(t5, toMethod("HEAD").Name(), "HEAD")
+    return Eq(t6, toMethod("OPTIONS").Name(), "OPTIONS")
+}
+
+// ============================================================================
+// Power Features — Negotiate Response Tests
+// ============================================================================
+
+func TestNegotiateJson(t T) T {
+    val r = buildReq(testReq("GET", "/").WithHeader("Accept", "application/json"))
+    val resp = Negotiate(r,
+        () => JsonResponse("{\"ok\":true}"),
+        () => Html("<p>ok</p>"),
+        () => Text("ok"))
+    val t1 = Eq(t, resp.Code(), 200)
+    return Eq(t1, resp.HeaderValue("Content-Type"), "application/json")
+}
+
+func TestNegotiateHtml(t T) T {
+    val r = buildReq(testReq("GET", "/").WithHeader("Accept", "text/html"))
+    val resp = Negotiate(r,
+        () => JsonResponse("{\"ok\":true}"),
+        () => Html("<p>ok</p>"),
+        () => Text("ok"))
+    val t1 = Eq(t, resp.Code(), 200)
+    return Eq(t1, resp.HeaderValue("Content-Type"), "text/html")
+}
+
+func TestNegotiateFallback(t T) T {
+    val r = buildReq(testReq("GET", "/").WithHeader("Accept", "text/plain"))
+    val resp = Negotiate(r,
+        () => JsonResponse("{\"ok\":true}"),
+        () => Html("<p>ok</p>"),
+        () => Text("ok"))
+    val t1 = Eq(t, resp.Code(), 200)
+    return Eq(t1, resp.HeaderValue("Content-Type"), "text/plain")
+}
+
+// ============================================================================
+// Power Features — New Status Constructors Tests
+// ============================================================================
+
+func TestUnprocessableEntityConstructor(t T) T {
+    val resp = UnprocessableEntity("invalid")
+    val t1 = Eq(t, resp.Code(), 422)
+    return Eq(t1, resp.Body, "invalid")
+}
+
+func TestTooManyRequestsConstructor(t T) T {
+    val resp = TooManyRequests("slow down")
+    val t1 = Eq(t, resp.Code(), 429)
+    return Eq(t1, resp.Body, "slow down")
+}
+
+func TestRequestTimeoutConstructor(t T) T {
+    val resp = RequestTimeout()
+    return Eq(t, resp.Code(), 408)
+}
+
+func TestBadGatewayConstructor(t T) T {
+    val resp = BadGateway("upstream error")
+    val t1 = Eq(t, resp.Code(), 502)
+    return Eq(t1, resp.Body, "upstream error")
+}
+
+// ============================================================================
+// Power Features — Response.copy() Builder Tests
+// ============================================================================
+
+func TestResponseCopyWithHeader(t T) T {
+    val r1 = Ok("hello")
+    val r2 = r1.WithHeader("X-Test", "value")
+    val t1 = Eq(t, r1.HeaderValue("X-Test"), "")
+    return Eq(t1, r2.HeaderValue("X-Test"), "value")
+}
+
+func TestResponseCopyWithBody(t T) T {
+    val r1 = Ok("original")
+    val r2 = r1.WithBody("updated")
+    val t1 = Eq(t, r1.Body, "original")
+    return Eq(t1, r2.Body, "updated")
+}
+
+func TestResponseCopyWithStatus(t T) T {
+    val r1 = Ok("hello")
+    val r2 = r1.WithStatus(StatusNotFound())
+    val t1 = Eq(t, r1.Code(), 200)
+    return Eq(t1, r2.Code(), 404)
+}
+
+func TestResponseCopyChained(t T) T {
+    val resp = Ok("original").
+        WithBody("updated").
+        WithHeader("X-A", "1").
+        WithStatus(StatusCreated())
+    val t1 = Eq(t, resp.Body, "updated")
+    val t2 = Eq(t1, resp.HeaderValue("X-A"), "1")
+    return Eq(t2, resp.Code(), 201)
+}

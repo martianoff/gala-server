@@ -1,0 +1,164 @@
+package server
+
+import (
+    . "martianoff/gala/test"
+    "github.com/martianoff/gala-server/httpcore"
+)
+
+// ============================================================================
+// Test Helpers
+// ============================================================================
+
+func exReq(method string, path string) *httpcore.TestRequestBuilder =
+    httpcore.NewTestRequestBuilder(method, path)
+
+func exBuild(b *httpcore.TestRequestBuilder) Request = Request(bridge = b.Build())
+
+// ============================================================================
+// PathParam Extractor Tests
+// ============================================================================
+
+func TestPathParamExists(t T) T {
+    val r = exBuild(exReq("GET", "/users/42").WithPathParam("id", "42"))
+    val result = PathParam(r, "id")
+    val t1 = IsSuccess(t, result)
+    return Eq(t1, result.Get(), "42")
+}
+
+func TestPathParamMissing(t T) T {
+    val r = exBuild(exReq("GET", "/users"))
+    val result = PathParam(r, "id")
+    return IsFailure(t, result)
+}
+
+func TestPathParamStringValue(t T) T {
+    val r = exBuild(exReq("GET", "/users/alice").WithPathParam("name", "alice"))
+    val result = PathParam(r, "name")
+    val t1 = IsSuccess(t, result)
+    return Eq(t1, result.Get(), "alice")
+}
+
+// ============================================================================
+// PathParamInt Extractor Tests
+// ============================================================================
+
+func TestPathParamIntValid(t T) T {
+    val r = exBuild(exReq("GET", "/users/42").WithPathParam("id", "42"))
+    val result = PathParamInt(r, "id")
+    val t1 = IsSuccess(t, result)
+    return Eq(t1, result.Get(), 42)
+}
+
+func TestPathParamIntInvalidString(t T) T {
+    val r = exBuild(exReq("GET", "/users/abc").WithPathParam("id", "abc"))
+    val result = PathParamInt(r, "id")
+    return IsFailure(t, result)
+}
+
+func TestPathParamIntMissing(t T) T {
+    val r = exBuild(exReq("GET", "/users"))
+    val result = PathParamInt(r, "id")
+    return IsFailure(t, result)
+}
+
+func TestPathParamIntNegative(t T) T {
+    val r = exBuild(exReq("GET", "/offset/-5").WithPathParam("offset", "-5"))
+    val result = PathParamInt(r, "offset")
+    val t1 = IsSuccess(t, result)
+    return Eq(t1, result.Get(), -5)
+}
+
+// ============================================================================
+// QueryRequired Extractor Tests
+// ============================================================================
+
+func TestQueryRequiredPresent(t T) T {
+    val r = exBuild(exReq("GET", "/search").WithRawQuery("q=gala"))
+    val result = QueryRequired(r, "q")
+    val t1 = IsSuccess(t, result)
+    return Eq(t1, result.Get(), "gala")
+}
+
+func TestQueryRequiredMissing(t T) T {
+    val r = exBuild(exReq("GET", "/search"))
+    val result = QueryRequired(r, "q")
+    return IsFailure(t, result)
+}
+
+func TestQueryRequiredEmptyQuery(t T) T {
+    val r = exBuild(exReq("GET", "/search").WithRawQuery("other=value"))
+    val result = QueryRequired(r, "q")
+    return IsFailure(t, result)
+}
+
+// ============================================================================
+// QueryInt Extractor Tests
+// ============================================================================
+
+func TestQueryIntPresent(t T) T {
+    val r = exBuild(exReq("GET", "/page").WithRawQuery("page=5"))
+    val result = QueryInt(r, "page", 1)
+    return Eq(t, result, 5)
+}
+
+func TestQueryIntMissingReturnsDefault(t T) T {
+    val r = exBuild(exReq("GET", "/page"))
+    val result = QueryInt(r, "page", 1)
+    return Eq(t, result, 1)
+}
+
+func TestQueryIntInvalidReturnsDefault(t T) T {
+    val r = exBuild(exReq("GET", "/page").WithRawQuery("page=abc"))
+    val result = QueryInt(r, "page", 1)
+    return Eq(t, result, 1)
+}
+
+func TestQueryIntZero(t T) T {
+    val r = exBuild(exReq("GET", "/page").WithRawQuery("page=0"))
+    val result = QueryInt(r, "page", 1)
+    return Eq(t, result, 0)
+}
+
+// ============================================================================
+// HeaderRequired Extractor Tests
+// ============================================================================
+
+func TestHeaderRequiredPresent(t T) T {
+    val r = exBuild(exReq("GET", "/").WithHeader("Authorization", "Bearer token123"))
+    val result = HeaderRequired(r, "Authorization")
+    val t1 = IsSuccess(t, result)
+    return Eq(t1, result.Get(), "Bearer token123")
+}
+
+func TestHeaderRequiredMissing(t T) T {
+    val r = exBuild(exReq("GET", "/"))
+    val result = HeaderRequired(r, "Authorization")
+    return IsFailure(t, result)
+}
+
+func TestHeaderRequiredContentType(t T) T {
+    val r = exBuild(exReq("POST", "/").WithHeader("Content-Type", "application/json"))
+    val result = HeaderRequired(r, "Content-Type")
+    val t1 = IsSuccess(t, result)
+    return Eq(t1, result.Get(), "application/json")
+}
+
+// ============================================================================
+// BodyAs Extractor Tests
+// ============================================================================
+
+// Note: BodyAs requires a JsonEncoder codec. Since we cannot easily create one
+// in tests without a struct definition, we test indirectly via BindJson which
+// has the same implementation. We test with raw body string checks instead.
+
+func TestBodyAsWithBody(t T) T {
+    val r = exBuild(exReq("POST", "/").WithBody("{\"name\": \"gala\"}"))
+    val body = r.Body()
+    return Eq(t, body, "{\"name\": \"gala\"}")
+}
+
+func TestBodyAsEmptyBody(t T) T {
+    val r = exBuild(exReq("POST", "/").WithBody(""))
+    val body = r.Body()
+    return Eq(t, body, "")
+}

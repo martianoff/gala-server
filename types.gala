@@ -15,6 +15,7 @@ sealed type Method {
     case PATCH()
     case HEAD()
     case OPTIONS()
+    case CUSTOM(MethodName string)
 }
 
 func (m Method) Name() string = m match {
@@ -25,6 +26,7 @@ func (m Method) Name() string = m match {
     case PATCH() => "PATCH"
     case HEAD() => "HEAD"
     case OPTIONS() => "OPTIONS"
+    case CUSTOM(name) => name
 }
 
 // --- HTTP Status Code (sealed type) ---
@@ -42,6 +44,10 @@ sealed type StatusCode {
     case StatusConflict()
     case StatusInternalError()
     case StatusServiceUnavailable()
+    case StatusUnprocessableEntity()
+    case StatusTooManyRequests()
+    case StatusRequestTimeout()
+    case StatusBadGateway()
     case StatusCustom(Value int)
 }
 
@@ -56,10 +62,23 @@ func (s StatusCode) Code() int = s match {
     case StatusNotFound() => 404
     case StatusMethodNotAllowed() => 405
     case StatusConflict() => 409
+    case StatusRequestTimeout() => 408
+    case StatusUnprocessableEntity() => 422
+    case StatusTooManyRequests() => 429
     case StatusInternalError() => 500
+    case StatusBadGateway() => 502
     case StatusServiceUnavailable() => 503
     case StatusCustom(code) => code
 }
+
+// --- ErrorMapper Type ---
+
+// ErrorMapper converts specific error types to HTTP responses.
+// Returns Some(response) if the error is handled, None otherwise.
+type ErrorMapper func(error) Option[Response]
+
+// WarmupFunc is a function that runs before the server accepts traffic.
+type WarmupFunc func()
 
 // --- Handler and Filter Types ---
 
