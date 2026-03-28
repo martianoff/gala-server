@@ -32,12 +32,10 @@ func SSE(events Array[SSEEvent]) Response {
     }).ToGoSlice()
     val br = httpcore.NewSSEResponse(goEvents)
     // Build Response from bridge response
-    var resp = NewResponse(StatusOk()).WithBody(br.Body)
-    // Apply SSE headers
-    resp = resp.WithHeader("Content-Type", "text/event-stream")
-    resp = resp.WithHeader("Cache-Control", "no-cache")
-    resp = resp.WithHeader("Connection", "keep-alive")
-    return resp
+    return NewResponse(StatusOk()).WithBody(br.Body).
+        WithHeader("Content-Type", "text/event-stream").
+        WithHeader("Cache-Control", "no-cache").
+        WithHeader("Connection", "keep-alive")
 }
 
 // SSEStream creates a simple SSE response with a single event.

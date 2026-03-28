@@ -75,7 +75,10 @@ func negotiateHandler(req Request) Response =
     Negotiate(req, negotiateJsonHandler, negotiateHtmlHandler, negotiateTextHandler)
 
 func sseHandler(req Request) Response =
-    SSEStream("message", "{\"text\": \"Hello from SSE!\"}")
+    SSE(ArrayOf(
+        SSEEvent(Event = "message", Data = "{\"text\": \"Hello!\"}", Id = "1", Retry = 0),
+        SSEEvent(Event = "update", Data = "{\"count\": 42}", Id = "2", Retry = 0),
+    ))
 
 func cookieHandler(req Request) Response {
     val visits = req.Cookie("visits").GetOrElse("0")
@@ -94,37 +97,6 @@ func jsonpHandler(req Request) Response {
     val cb = req.QueryParamDefault("callback", "handleData")
     return JSONP(cb, "{\"data\": \"hello\"}")
 }
-
-func secretHandler(req Request) Response = Ok("secret data")
-
-func basicHandler(req Request) Response {
-    val user = req.CtxGet("username").GetOrElse("anonymous")
-    return Ok(s"Hello, $user!")
-}
-
-func basicAuthValidator(u string, p string) bool = u == "admin" && p == "password"
-
-func apiKeyValidator(key string) bool = key == "my-secret-key"
-
-func adminStatsHandler(req Request) Response =
-    JsonResponse("{\"admin\": true, \"uptime\": \"24h\"}")
-
-func adminConfigHandler(req Request) Response =
-    JsonResponse("{\"debug\": true, \"version\": \"0.1.0\"}")
-
-func adminTokenValidator(token string) bool = token == "admin-secret"
-
-func errorHandler(err error) Response =
-    InternalError(s"Server error: $err")
-
-func notFoundHandler(req Request) Response =
-    NotFound(s"${req.Method().Name()} ${req.Path()} not found")
-
-func warmupHandler() {
-    Println("   Warming up...")
-}
-
-func readinessCheck() bool = true
 
 func main() {
     // --- Route Groups ---
@@ -145,9 +117,9 @@ func main() {
 
     // Admin API — requires bearer token + security headers
     val adminApi = NewGroup().
-        GET("/stats", adminStatsHandler).
-        GET("/config", adminConfigHandler).
-        WithFilter(AuthBearer(adminTokenValidator)).
+        GET("/stats", (req) => JsonResponse("{\"admin\": true, \"uptime\": \"24h\"}")).
+        GET("/config", (req) => JsonResponse("{\"debug\": true, \"version\": \"0.1.0\"}")).
+        WithFilter(AuthBearer((token) => token == "admin-secret")).
         WithFilter(Secure())
 
     // --- Server Assembly ---
@@ -159,13 +131,13 @@ func main() {
         WithShutdownTimeout(15 * time.Second).
         WithDebug(true).
         // Error handling
-        WithErrorHandler(errorHandler).
-        WithNotFound(notFoundHandler).
+        WithErrorHandler((err) => NewHTTPError(StatusInternalError(), s"$err").ToJsonResponse()).
+        WithNotFound((req) => NewHTTPError(StatusNotFound(), s"${req.Method().Name()} ${req.Path()} not found").ToJsonResponse()).
         // Warmup
-        WithWarmup(warmupHandler).
+        WithWarmup(() => Println("   Warming up...")).
         // Health & readiness
         WithHealthCheck("/health").
-        WithReadiness("/ready", readinessCheck).
+        WithReadiness("/ready", () => true).
         // Named routes
         GET("/", homeHandler).Named("home").
         GET("/cookies", cookieHandler).Named("cookies").
@@ -175,9 +147,13 @@ func main() {
         GET("/xml", xmlHandler).
         GET("/jsonp", jsonpHandler).
         // Per-route auth
-        GET("/secret", secretHandler, Auth()).
-        GET("/basic", basicHandler, BasicAuth(basicAuthValidator)).
-        GET("/api-key", secretHandler, KeyAuth("header:X-API-Key", apiKeyValidator)).
+        GET("/secret", (req) => Ok("secret data"), Auth()).
+        GET("/basic", (req) => {
+            val user = req.CtxGet("username").GetOrElse("anonymous")
+            return Ok(s"Hello, $user!")
+        }, BasicAuth((u, p) => u == "admin" && p == "password")).
+        GET("/api-key", (req) => Ok("API key authenticated"),
+            KeyAuth("header:X-API-Key", (key) => key == "my-secret-key")).
         // Groups
         Group("/public", publicApi).
         Group("/v1", usersApi).

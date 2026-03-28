@@ -31,7 +31,7 @@ _GALA_SRCS = glob(
 gala_library(
     name = "gala-server",
     srcs = _GALA_SRCS,
-    importpath = "martianoff/gala-server",
+    importpath = "github.com/martianoff/gala-server",
     deps = [
         "//httpcore",
         "@gala//collection_immutable",

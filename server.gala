@@ -309,9 +309,7 @@ func (s Server) ListenGracefulTLSOn(addr string, certFile string, keyFile string
 // --- Internal ---
 
 func (s Server) runWarmup() {
-    if s.warmup.IsDefined() {
-        s.warmup.Get()()
-    }
+    s.warmup.ForEach((handler) => handler())
 }
 
 func (s Server) buildServerBuilder() *httpcore.ServerBuilder {
@@ -357,14 +355,18 @@ func (s Server) printBanner(addr string, graceful bool, tls bool) {
     Println("")
 }
 
-func handleError(err error, errHandler func(error) Response, errMapper Option[ErrorMapper]) Response =
-    errMapper.FlatMap((mapper) => mapper(err)).GetOrElse(errHandler(err))
-
 func makeBridgeHandler(handler Handler, errHandler func(error) Response, errMapper Option[ErrorMapper]) httpcore.BridgeHandler =
     (br httpcore.BridgeRequest) => {
         val req = Request(bridge = br)
         return handler(req).Await() match {
             case Success(resp) => resp.ToBridge()
-            case Failure(err) => handleError(err, errHandler, errMapper).ToBridge()
+            case Failure(err) => {
+                val mapped = errMapper.FlatMap((mapper) => mapper(err))
+                val resp = mapped match {
+                    case Some(r) => r
+                    case None() => errHandler(err)
+                }
+                return resp.ToBridge()
+            }
         }
     }

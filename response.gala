@@ -291,7 +291,11 @@ func RedirectPermanent(url string) Response =
 
 // ToBridge converts the Response to a Go bridge response for httpcore.
 func (resp Response) ToBridge() *httpcore.BridgeResponse {
-    val br = if (resp.BodyBytes.IsDefined()) httpcore.NewBridgeResponseBytes(resp.Code(), resp.BodyBytes.Get().ToGoSlice(), resp.HeaderValue("Content-Type")) else httpcore.NewBridgeResponse(resp.Code(), resp.Body)
+    val br = if (resp.BodyBytes.IsDefined()) {
+        httpcore.NewBridgeResponseBytes(resp.Code(), resp.BodyBytes.Get().ToGoSlice(), resp.HeaderValue("Content-Type"))
+    } else {
+        httpcore.NewBridgeResponse(resp.Code(), resp.Body)
+    }
     resp.Headers.ForEach((pair) => br.SetHeader(pair.V1, pair.V2))
     resp.Cookies.ForEach((c) => br.AddCookie(httpcore.BridgeCookie{
         Name:     c.Name,
