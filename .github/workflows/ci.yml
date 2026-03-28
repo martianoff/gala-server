@@ -38,7 +38,7 @@ jobs:
           repository-cache: true
 
       - name: Build
-        run: bazel build //... --spawn_strategy=local
+        run: bazel build //...
 
       - name: Test
-        run: bazel test //... --test_output=errors --spawn_strategy=local
+        run: bazel test //... --test_output=errors
