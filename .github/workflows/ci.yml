@@ -27,34 +27,8 @@ jobs:
           chmod +x /usr/local/bin/gala
           gala version
 
-      - name: Clone GALA toolchain
-        run: |
-          git clone --depth 1 --branch ${GALA_VERSION} \
-            https://github.com/martianoff/gala.git ../gala_simple
-
-      - name: Regenerate go.mod
-        run: gala mod tidy
-
-      - name: Setup Bazel
-        uses: bazel-contrib/setup-bazel@0.14.0
-        with:
-          bazelisk-cache: true
-          disk-cache: ${{ github.workflow }}
-          repository-cache: true
-
-      - name: Build library
-        run: |
-          GOROOT_PATH=$(go env GOROOT)
-          bazel build //:gala-server //examples/hello \
-            --repo_env=GOROOT="$GOROOT_PATH" \
-            --action_env=GOROOT="$GOROOT_PATH" \
-            --action_env=PATH
+      - name: Build
+        run: gala build
 
       - name: Test
-        run: |
-          GOROOT_PATH=$(go env GOROOT)
-          bazel test //:server_test //:filter_test //:integration_test //:extractor_test //:sse_test \
-            --test_output=errors \
-            --repo_env=GOROOT="$GOROOT_PATH" \
-            --action_env=GOROOT="$GOROOT_PATH" \
-            --action_env=PATH
+        run: gala test
