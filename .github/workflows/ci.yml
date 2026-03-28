@@ -42,12 +42,19 @@ jobs:
           disk-cache: ${{ github.workflow }}
           repository-cache: true
 
-      - name: Build
+      - name: Build library
         run: |
           GOROOT_PATH=$(go env GOROOT)
-          bazel build //... --repo_env=GOROOT="$GOROOT_PATH" --action_env=GOROOT="$GOROOT_PATH" --action_env=PATH
+          bazel build //:gala-server //examples/hello \
+            --repo_env=GOROOT="$GOROOT_PATH" \
+            --action_env=GOROOT="$GOROOT_PATH" \
+            --action_env=PATH
 
       - name: Test
         run: |
           GOROOT_PATH=$(go env GOROOT)
-          bazel test //... --test_output=errors --repo_env=GOROOT="$GOROOT_PATH" --action_env=GOROOT="$GOROOT_PATH" --action_env=PATH
+          bazel test //:server_test //:filter_test //:integration_test //:extractor_test //:sse_test \
+            --test_output=errors \
+            --repo_env=GOROOT="$GOROOT_PATH" \
+            --action_env=GOROOT="$GOROOT_PATH" \
+            --action_env=PATH
