@@ -15,27 +15,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install GALA
+      - name: Install GALA CLI
         run: |
           curl -fsSL -o /usr/local/bin/gala \
             "https://github.com/martianoff/gala/releases/download/${GALA_VERSION}/gala-linux-amd64"
           chmod +x /usr/local/bin/gala
           gala version
 
-      - name: Regenerate go.mod for this environment
-        run: gala mod tidy
-
-      - name: Use remote GALA module for CI
+      - name: Clone GALA toolchain
         run: |
-          sed -i '/^local_path_override(/,/^)/d' MODULE.bazel
-          cat >> MODULE.bazel << 'EOF'
+          git clone --depth 1 --branch ${GALA_VERSION} \
+            https://github.com/martianoff/gala.git ../gala_simple
 
-          git_override(
-              module_name = "gala",
-              remote = "https://github.com/martianoff/gala.git",
-              tag = "0.23.0",
-          )
-          EOF
+      - name: Regenerate go.mod
+        run: gala mod tidy
 
       - name: Setup Bazel
         uses: bazel-contrib/setup-bazel@0.14.0
