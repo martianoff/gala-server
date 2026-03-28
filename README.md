@@ -127,36 +127,72 @@ server.
 
 ## Prerequisites
 
-- [GALA](https://github.com/martianoff/gala) compiler (dev build or v0.21.0+)
+- [GALA](https://github.com/martianoff/gala) compiler (v0.23.0+)
 - [Go SDK](https://go.dev/dl/) 1.25+ on PATH
-- [Bazel](https://github.com/bazelbuild/bazelisk) (via Bazelisk) — optional, for Bazel builds
+- [Bazel](https://github.com/bazelbuild/bazelisk) (via Bazelisk)
+- GALA toolchain cloned as a sibling directory: `git clone https://github.com/martianoff/gala.git ../gala_simple`
 
 ## Build & Test
 
-### Using GALA CLI (recommended)
-
 ```shell
-# Transpile and compile-check (library)
-gala build
+# Build library
+bazel build //:gala-server
 
-# Transpile and run all 235 tests
-gala test
-```
-
-### Using Bazel
-
-```shell
-# Run all tests
-bazel test //:server_test //:filter_test //:integration_test
+# Run all tests (5 test targets, 300+ test functions)
+bazel test //:server_test //:filter_test //:integration_test //:extractor_test //:sse_test
 
 # Run a specific test target
 bazel test //:server_test
 
-# Build library only
+# Build everything including examples
 bazel build //...
 ```
 
-> **Note:** `MODULE.bazel` uses `local_path_override` pointing to the local GALA checkout (`../gala_simple`). Update the path if your GALA repo is elsewhere.
+> **Note:** `MODULE.bazel` uses `local_path_override` pointing to `../gala_simple`. Clone the [GALA repo](https://github.com/martianoff/gala) there, or update the path.
+
+## Running the Example
+
+The `examples/hello/` directory contains a full-featured demo with 20 routes, 8 filters, route groups, auth, SSE, content negotiation, health checks, and more.
+
+```shell
+# Build and run
+bazel run //examples/hello
+```
+
+The server starts on `http://localhost:8080` with base path `/api`. Test with:
+
+```shell
+# Basic routes
+curl http://localhost:8080/api/
+curl http://localhost:8080/api/health
+curl http://localhost:8080/api/ready
+
+# Search with query params
+curl "http://localhost:8080/api/public/search?q=gala&page=2"
+
+# Server-Sent Events
+curl http://localhost:8080/api/public/sse
+
+# Content negotiation
+curl -H "Accept: application/json" http://localhost:8080/api/public/negotiate
+curl -H "Accept: text/html" http://localhost:8080/api/public/negotiate
+
+# Auth required (401 without header)
+curl http://localhost:8080/api/v1/users
+curl -H "Authorization: Bearer any-token" http://localhost:8080/api/v1/users
+curl -H "Authorization: Bearer any-token" http://localhost:8080/api/v1/users/42
+
+# Basic auth
+curl -u admin:password http://localhost:8080/api/basic
+
+# API key auth
+curl -H "X-API-Key: my-secret-key" http://localhost:8080/api/api-key
+
+# Admin (bearer token)
+curl -H "Authorization: Bearer admin-secret" http://localhost:8080/api/admin/stats
+```
+
+See [`examples/hello/README.md`](examples/hello/README.md) for the full list of test commands.
 
 ## Project Structure
 
@@ -211,7 +247,7 @@ The GALA layer is purely functional and immutable. The httpcore bridge is a thin
 
 ## Test Coverage
 
-235 tests across 3 test files — **all passing** via `gala test` and `bazel test`:
+300+ tests across 5 test targets — **all passing** via `bazel test`:
 
 - **Server builder**: NewServer, WithPort, WithName, WithDebug, WithBanner, immutability, Any method
 - **Response constructors**: all 16 status codes, content types (JSON, HTML, XML, Text), JSONP, blobs, redirects, streams
