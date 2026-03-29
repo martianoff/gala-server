@@ -52,10 +52,6 @@ func (r Request) IsWebSocket() bool = r.bridge.IsWebSocket()
 func optionFromString(s string) Option[string] =
     if (s == "") None[string]() else Some(s)
 
-// optionFromBool converts a Go (value, ok) pair to Option.
-func optionFromBool(v string, ok bool) Option[string] =
-    if (ok) Some(v) else None[string]()
-
 // --- Path Parameters ---
 
 // Param returns a path parameter by name.
@@ -156,7 +152,7 @@ func (r Request) FormParams(name string) Array[string] {
 // Cookie returns a cookie value by name.
 func (r Request) Cookie(name string) Option[string] {
     val v, ok = r.bridge.CookieValue(name)
-    return optionFromBool(v, ok)
+    return When(ok, v)
 }
 
 // --- JSON Body Parsing (Bind) ---
@@ -180,7 +176,7 @@ func JsonBody[T any](r Request, codec JsonEncoder[T]) Try[T] =
 // CtxGet retrieves a string value from the per-request context.
 func (r Request) CtxGet(key string) Option[string] {
     val v, ok = r.bridge.CtxValues().GetString(key)
-    return optionFromBool(v, ok)
+    return When(ok, v)
 }
 
 // CtxGetInt retrieves an int value from the per-request context.

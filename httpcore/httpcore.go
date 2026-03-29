@@ -1701,7 +1701,7 @@ func (ss *SessionStore) SessionCount() int {
 }
 
 // SessionFromContext retrieves a SessionData from a ContextValues store.
-// Returns (session, ok). Used by GALA code to avoid Go type assertions.
+// Note: Go bridge helper required due to transpiler BUG-055 (pointer type in typed pattern match).
 func SessionFromContext(cv *ContextValues) (*SessionData, bool) {
 	raw, ok := cv.Get("_session")
 	if !ok {

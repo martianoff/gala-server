@@ -180,26 +180,34 @@ func JsonPretty[T any](value T, codec JsonEncoder[T]) Response =
 
 // File serves a file from the filesystem. Equivalent to Echo's c.File().
 func File(path string) Response {
-    val data, contentType, err = httpcore.ReadFile(path)
-    if err != nil { return NotFound(s"File not found: $path") }
-    return Blob(StatusOk(), contentType, data)
+    val result = Try(() => httpcore.ReadFile(path))
+    return result match {
+        case Success(r) => Blob(StatusOk(), r.V2, r.V1)
+        case Failure(_) => NotFound(s"File not found: $path")
+    }
 }
 
 // Attachment serves a file as a download with the given filename.
 // Sets Content-Disposition: attachment to force browser download.
 func Attachment(path string, filename string) Response {
-    val data, contentType, err = httpcore.ReadFile(path)
-    if err != nil { return NotFound(s"File not found: $path") }
-    return Blob(StatusOk(), contentType, data).
-        WithHeader("Content-Disposition", s"attachment; filename=\"$filename\"")
+    val result = Try(() => httpcore.ReadFile(path))
+    return result match {
+        case Success(r) =>
+            Blob(StatusOk(), r.V2, r.V1).
+                WithHeader("Content-Disposition", s"attachment; filename=\"$filename\"")
+        case Failure(_) => NotFound(s"File not found: $path")
+    }
 }
 
 // Inline serves a file inline (displayed in browser, not downloaded).
 func Inline(path string, filename string) Response {
-    val data, contentType, err = httpcore.ReadFile(path)
-    if err != nil { return NotFound(s"File not found: $path") }
-    return Blob(StatusOk(), contentType, data).
-        WithHeader("Content-Disposition", s"inline; filename=\"$filename\"")
+    val result = Try(() => httpcore.ReadFile(path))
+    return result match {
+        case Success(r) =>
+            Blob(StatusOk(), r.V2, r.V1).
+                WithHeader("Content-Disposition", s"inline; filename=\"$filename\"")
+        case Failure(_) => NotFound(s"File not found: $path")
+    }
 }
 
 // ============================================================================

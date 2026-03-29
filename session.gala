@@ -108,25 +108,19 @@ func SessionFilter(sessions Sessions) Filter =
 
 // SessionGet retrieves a value from the current session.
 // Requires SessionFilter to be active.
+// Note: Uses Go bridge helper due to transpiler BUG-055 (pointer type in typed pattern match).
 func (r Request) SessionGet(key string) Option[string] {
     val session, ok = httpcore.SessionFromContext(r.bridge.CtxValues())
-    if !ok {
-        return None[string]()
-    }
+    if !ok { return None[string]() }
     val v, found = session.Get(key)
-    if !found {
-        return None[string]()
-    }
-    return Some(v)
+    return When(found, v)
 }
 
 // SessionSet stores a value in the current session.
 // Requires SessionFilter to be active.
 func (r Request) SessionSet(key string, value string) {
     val session, ok = httpcore.SessionFromContext(r.bridge.CtxValues())
-    if !ok {
-        return
-    }
+    if !ok { return }
     session.Set(key, value)
 }
 
@@ -134,8 +128,6 @@ func (r Request) SessionSet(key string, value string) {
 // Requires SessionFilter to be active.
 func (r Request) SessionDelete(key string) {
     val session, ok = httpcore.SessionFromContext(r.bridge.CtxValues())
-    if !ok {
-        return
-    }
+    if !ok { return }
     session.Delete(key)
 }
