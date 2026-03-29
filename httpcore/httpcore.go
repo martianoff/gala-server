@@ -1700,17 +1700,6 @@ func (ss *SessionStore) SessionCount() int {
 	return len(ss.sessions)
 }
 
-// SessionFromContext retrieves a SessionData from a ContextValues store.
-// Note: Go bridge helper required due to transpiler BUG-055 (pointer type in typed pattern match).
-func SessionFromContext(cv *ContextValues) (*SessionData, bool) {
-	raw, ok := cv.Get("_session")
-	if !ok {
-		return nil, false
-	}
-	sd, ok := raw.(*SessionData)
-	return sd, ok
-}
-
 // Cleanup removes sessions older than maxAge.
 func (ss *SessionStore) Cleanup(maxAge time.Duration) int {
 	ss.mu.Lock()

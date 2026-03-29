@@ -106,28 +106,35 @@ func SessionFilter(sessions Sessions) Filter =
 
 // --- Request Session Accessors ---
 
+// sessionFromCtx extracts the SessionData from the request context using typed pattern matching.
+func sessionFromCtx(r Request) Option[*httpcore.SessionData] {
+    val raw, ok = r.bridge.CtxValues().Get("_session")
+    if !ok { return None[*httpcore.SessionData]() }
+    val value any = raw
+    return value match {
+        case sd: *httpcore.SessionData => Some(sd)
+        case _ => None[*httpcore.SessionData]()
+    }
+}
+
 // SessionGet retrieves a value from the current session.
 // Requires SessionFilter to be active.
-// Note: Uses Go bridge helper due to transpiler BUG-055 (pointer type in typed pattern match).
 func (r Request) SessionGet(key string) Option[string] {
-    val session, ok = httpcore.SessionFromContext(r.bridge.CtxValues())
-    if !ok { return None[string]() }
-    val v, found = session.Get(key)
-    return When(found, v)
+    return sessionFromCtx(r).FlatMap((session) => {
+        val v, found = session.Get(key)
+        if found { return Some(v) }
+        return None[string]()
+    })
 }
 
 // SessionSet stores a value in the current session.
 // Requires SessionFilter to be active.
 func (r Request) SessionSet(key string, value string) {
-    val session, ok = httpcore.SessionFromContext(r.bridge.CtxValues())
-    if !ok { return }
-    session.Set(key, value)
+    sessionFromCtx(r).ForEach((session) => session.Set(key, value))
 }
 
 // SessionDelete removes a value from the current session.
 // Requires SessionFilter to be active.
 func (r Request) SessionDelete(key string) {
-    val session, ok = httpcore.SessionFromContext(r.bridge.CtxValues())
-    if !ok { return }
-    session.Delete(key)
+    sessionFromCtx(r).ForEach((session) => session.Delete(key))
 }
