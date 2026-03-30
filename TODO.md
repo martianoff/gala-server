@@ -46,17 +46,20 @@
 - [x] `Response.copy()` private method (refactored builder methods to use it)
 - [x] Improved `toMethod` default (uses `CUSTOM(name)` instead of silently returning `GET()`)
 
+### Tier 5: Observability, Sessions, Advanced Rate Limiting (Finatra-inspired)
+- [x] Metrics filter + Prometheus endpoint (`NewMetrics`, `MetricsFilter`, `WithMetricsEndpoint`)
+- [x] In-memory session management (`NewSessions`, `SessionFilter`, `req.SessionGet/SessionSet/SessionDelete`)
+- [x] Sliding window rate limiter (`RateLimitSlidingWindow`, `RateLimitSlidingWindowPerIP`)
+
 ## Future Ideas
 - [ ] WebSocket support (upgrade handler)
 - [ ] HTTP/2 push
 - [ ] OpenTelemetry / tracing integration
-- [ ] Metrics endpoint (Prometheus format)
 - [ ] Request validation via struct tags
 - [ ] Multipart file upload streaming
-- [ ] Session management (cookie-based, Redis-backed)
+- [ ] Session management with Redis backend
 - [ ] GraphQL handler integration
 - [ ] gRPC bridge
 - [ ] Hot reload in development mode
 - [ ] OpenAPI / Swagger spec generation
-- [ ] Rate limiter with sliding window algorithm
 - [ ] Distributed circuit breaker (Redis-backed)

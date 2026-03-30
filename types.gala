@@ -100,12 +100,8 @@ sealed type HTTPError {
     case HTTPErr(Status StatusCode, Message string, Internal error)
 }
 
-// NewHTTPError creates an HTTPError with the given status and message.
-func NewHTTPError(status StatusCode, message string) HTTPError =
-    HTTPErr(status, message, nil)
-
-// NewHTTPErrorWithInternal creates an HTTPError with the given status, message, and internal error.
-func NewHTTPErrorWithInternal(status StatusCode, message string, internal error) HTTPError =
+// NewHTTPError creates an HTTPError with the given status, message, and optional internal error.
+func NewHTTPError(status StatusCode, message string, internal error = nil) HTTPError =
     HTTPErr(status, message, internal)
 
 // Code returns the numeric HTTP status code.

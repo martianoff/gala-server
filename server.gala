@@ -122,6 +122,17 @@ func (s Server) WithErrorMapper(mapper ErrorMapper) Server =
 func (s Server) WithWarmup(handler func()) Server =
     s.copy(wu = Some(handler))
 
+// WithMetricsEndpoint registers a Prometheus-compatible metrics endpoint at the given path.
+// Requires a Metrics collector — also add MetricsFilter() as a global filter.
+//
+//   val stats = NewMetrics()
+//   NewServer().
+//       WithFilter(MetricsFilter(stats)).
+//       WithMetricsEndpoint("/metrics", stats).
+//       GET("/hello", (req) => Ok("hello"))
+func (s Server) WithMetricsEndpoint(path string, m Metrics) Server =
+    s.GET(path, metricsHandler(m))
+
 // Render renders a template using the registered Renderer and returns an HTML response.
 // Equivalent to Echo's c.Render().
 func (s Server) Render(name string, data any) Response =
@@ -140,12 +151,7 @@ func (s Server) WithHealthCheck(path string) Server =
 // WithReadiness registers a readiness endpoint with a custom check function.
 // Returns 200 OK if the check returns true, 503 Service Unavailable otherwise.
 func (s Server) WithReadiness(path string, check func() bool) Server =
-    s.GET(path, (req Request) => {
-        if check() {
-            return Ok("READY")
-        }
-        return ServiceUnavailable("NOT READY")
-    })
+    s.GET(path, (req Request) => if (check()) Ok("READY") else ServiceUnavailable("NOT READY"))
 
 // --- Static Files ---
 
@@ -221,15 +227,9 @@ func (s Server) Named(name string) Server {
 // Parameters are provided as key-value pairs: URL("user", "id", "42")
 // Returns None if no route with the given name exists.
 func (s Server) URL(name string, params ...string) Option[string] =
-    s.root.Routes.Find((r) => r.Name == name).Map((r) => {
-        var path = r.Pattern
-        var i = 0
-        for i < len(params) - 1 {
-            path = strings.Replace(path, s"{${params[i]}}", params[i + 1], 1)
-            i = i + 2
-        }
-        return path
-    })
+    s.root.Routes.Find((r) => r.Name == name).Map((r) =>
+        ArrayOf(params...).Grouped(2).FoldLeft(r.Pattern, (path, pair) =>
+            if (pair.Size() == 2) strings.Replace(path, s"{${pair.Get(0)}}", pair.Get(1), 1) else path))
 
 // --- Queries ---
 
@@ -250,11 +250,7 @@ func (s Server) ListenOn(addr string) Try[bool] {
     val sb = s.buildServerBuilder()
     s.runWarmup()
     s.printBanner(addr, false, false)
-    val err = sb.ListenAndServe(addr)
-    if err != nil {
-        return Failure[bool](err)
-    }
-    return Success(true)
+    return Try(() => sb.ListenAndServe(addr)).Map((_) => true)
 }
 
 // ListenGraceful starts the HTTP server with graceful shutdown on SIGINT/SIGTERM.
@@ -265,11 +261,7 @@ func (s Server) ListenGracefulOn(addr string) Try[bool] {
     val sb = s.buildServerBuilder()
     s.runWarmup()
     s.printBanner(addr, true, false)
-    val err = sb.ListenAndServeGraceful(addr, s.ShutdownTimeout)
-    if err != nil {
-        return Failure[bool](err)
-    }
-    return Success(true)
+    return Try(() => sb.ListenAndServeGraceful(addr, s.ShutdownTimeout)).Map((_) => true)
 }
 
 // --- Listen (TLS/HTTPS) ---
@@ -283,11 +275,7 @@ func (s Server) ListenTLSOn(addr string, certFile string, keyFile string) Try[bo
     val sb = s.buildServerBuilder()
     s.runWarmup()
     s.printBanner(addr, false, true)
-    val err = sb.ListenAndServeTLS(addr, certFile, keyFile)
-    if err != nil {
-        return Failure[bool](err)
-    }
-    return Success(true)
+    return Try(() => sb.ListenAndServeTLS(addr, certFile, keyFile)).Map((_) => true)
 }
 
 // ListenGracefulTLS starts the HTTPS server with TLS and graceful shutdown.
@@ -299,11 +287,7 @@ func (s Server) ListenGracefulTLSOn(addr string, certFile string, keyFile string
     val sb = s.buildServerBuilder()
     s.runWarmup()
     s.printBanner(addr, true, true)
-    val err = sb.ListenAndServeTLSGraceful(addr, certFile, keyFile, s.ShutdownTimeout)
-    if err != nil {
-        return Failure[bool](err)
-    }
-    return Success(true)
+    return Try(() => sb.ListenAndServeTLSGraceful(addr, certFile, keyFile, s.ShutdownTimeout)).Map((_) => true)
 }
 
 // --- Internal ---

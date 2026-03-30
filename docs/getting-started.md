@@ -168,8 +168,45 @@ func handler(req Request) Response =
     )
 ```
 
+## Metrics (Prometheus)
+
+Track request count, latency, and status codes with a built-in Prometheus endpoint:
+
+```gala
+val stats = NewMetrics()
+
+val server = NewServer().
+    WithFilter(MetricsFilter(stats)).
+    WithMetricsEndpoint("/metrics", stats).
+    GET("/hello", (req) => Ok("hello")).
+    ListenGraceful()
+```
+
+Visit `/metrics` to see Prometheus-format stats: `gala_requests_total`, `gala_responses_total{status}`, `gala_route_latency_avg_ms{route}`, and more.
+
+## Sessions
+
+Cookie-based in-memory sessions for stateful request handling:
+
+```gala
+val sessions = NewSessions("my-secret")
+
+val server = NewServer().
+    WithFilter(SessionFilter(sessions)).
+    GET("/login", (req) => {
+        req.SessionSet("user", "alice")
+        return Ok("logged in")
+    }).
+    GET("/profile", (req) => {
+        val user = req.SessionGet("user").GetOrElse("anonymous")
+        return Ok(s"Hello, $user")
+    })
+```
+
+Sessions are stored in-memory with concurrent access support. Configure with `WithCookieName`, `WithMaxAge`, `WithSecure`.
+
 ## Next Steps
 
-- [API Reference](api-reference.md) -- complete reference for all response constructors, request methods, extractors, SSE, and filters
+- [API Reference](api-reference.md) -- complete reference for all types, constructors, metrics, sessions, and filters
 - [Filters](filters.md) -- filter system with three scopes, filter algebra, and resilience patterns
 - [Route Groups](groups.md) -- organizing routes with shared prefixes and filters

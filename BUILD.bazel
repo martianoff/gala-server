@@ -89,3 +89,19 @@ gala_go_test(
     lib_srcs = _GALA_SRCS,
     deps = _TEST_DEPS,
 )
+
+gala_go_test(
+    name = "metrics_test",
+    srcs = ["metrics_test.gala"],
+    pkg = "server",
+    lib_srcs = _GALA_SRCS,
+    deps = _TEST_DEPS,
+)
+
+gala_go_test(
+    name = "session_test",
+    srcs = ["session_test.gala"],
+    pkg = "server",
+    lib_srcs = _GALA_SRCS,
+    deps = _TEST_DEPS,
+)

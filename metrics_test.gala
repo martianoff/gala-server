@@ -1,0 +1,126 @@
+package server
+
+import (
+    . "martianoff/gala/test"
+    . "martianoff/gala/concurrent"
+    "github.com/martianoff/gala-server/httpcore"
+    "strings"
+    "time"
+)
+
+// ============================================================================
+// Test Helpers
+// ============================================================================
+
+func metricsReq(method string, path string) Request =
+    Request(bridge = httpcore.NewTestRequestBuilder(method, path).Build())
+
+val metricsOkHandler Handler = (r Request) => FutureOf(Ok("ok"))
+
+val metricsSlowHandler Handler = (r Request) => FutureApply(() => {
+    time.Sleep(10 * time.Millisecond)
+    return Ok("slow")
+})
+
+val metricsErrorHandler Handler = (r Request) => FutureOf(InternalError("fail"))
+
+// ============================================================================
+// Metrics Collector Tests
+// ============================================================================
+
+func TestNewMetrics(t T) T {
+    val m = NewMetrics()
+    val t1 = Eq(t, m.TotalRequests(), int64(0))
+    return IsTrue(t1, m.UptimeSeconds() >= 0.0)
+}
+
+func TestMetricsFilterRecordsRequest(t T) T {
+    val m = NewMetrics()
+    val filter = MetricsFilter(m)
+    val r = metricsReq("GET", "/hello")
+    val resp = filter(r, metricsOkHandler).Get()
+    val t1 = Eq(t, resp.Code(), 200)
+    return Eq(t1, m.TotalRequests(), int64(1))
+}
+
+func TestMetricsFilterTracksMultipleRequests(t T) T {
+    val m = NewMetrics()
+    val filter = MetricsFilter(m)
+
+    filter(metricsReq("GET", "/a"), metricsOkHandler).Get()
+    filter(metricsReq("POST", "/b"), metricsOkHandler).Get()
+    filter(metricsReq("GET", "/a"), metricsErrorHandler).Get()
+
+    return Eq(t, m.TotalRequests(), int64(3))
+}
+
+func TestMetricsFilterDoesNotAlterResponse(t T) T {
+    val m = NewMetrics()
+    val filter = MetricsFilter(m)
+    val r = metricsReq("GET", "/test")
+    val resp = filter(r, metricsOkHandler).Get()
+    val t1 = Eq(t, resp.Code(), 200)
+    return Eq(t1, resp.Body, "ok")
+}
+
+func TestMetricsFilterWithErrorResponse(t T) T {
+    val m = NewMetrics()
+    val filter = MetricsFilter(m)
+    val r = metricsReq("GET", "/fail")
+    val resp = filter(r, metricsErrorHandler).Get()
+    val t1 = Eq(t, resp.Code(), 500)
+    return Eq(t1, m.TotalRequests(), int64(1))
+}
+
+func TestMetricsFilterWithFutureHandler(t T) T {
+    val m = NewMetrics()
+    val filter = MetricsFilter(m)
+    val r = metricsReq("GET", "/slow")
+    val resp = filter(r, metricsSlowHandler).Get()
+    val t1 = Eq(t, resp.Code(), 200)
+    return Eq(t1, m.TotalRequests(), int64(1))
+}
+
+// ============================================================================
+// Prometheus Endpoint Tests
+// ============================================================================
+
+func TestMetricsHandlerReturnsPrometheusFormat(t T) T {
+    val m = NewMetrics()
+    val filter = MetricsFilter(m)
+    // Generate some traffic
+    filter(metricsReq("GET", "/hello"), metricsOkHandler).Get()
+    filter(metricsReq("POST", "/users"), metricsOkHandler).Get()
+
+    val handler = metricsHandler(m)
+    val resp = handler(metricsReq("GET", "/metrics"))
+    val t1 = Eq(t, resp.Code(), 200)
+    val t2 = Contains(t1, resp.HeaderValue("Content-Type"), "text/plain")
+    val t3 = Contains(t2, resp.Body, "gala_requests_total 2")
+    val t4 = Contains(t3, resp.Body, "gala_uptime_seconds")
+    return Contains(t4, resp.Body, "gala_responses_total")
+}
+
+func TestMetricsHandlerShowsRouteBreakdown(t T) T {
+    val m = NewMetrics()
+    val filter = MetricsFilter(m)
+    filter(metricsReq("GET", "/api/users"), metricsOkHandler).Get()
+    filter(metricsReq("GET", "/api/users"), metricsOkHandler).Get()
+
+    val resp = metricsHandler(m)(metricsReq("GET", "/metrics"))
+    val t1 = Contains(t, resp.Body, "gala_route_requests_total")
+    return Contains(t1, resp.Body, "GET /api/users")
+}
+
+// ============================================================================
+// Server WithMetricsEndpoint Test
+// ============================================================================
+
+func TestWithMetricsEndpointAddsRoute(t T) T {
+    val m = NewMetrics()
+    val s = NewServer().
+        WithFilter(MetricsFilter(m)).
+        WithMetricsEndpoint("/metrics", m).
+        GET("/hello", (req) => Ok("hello"))
+    return Eq(t, s.RouteCount(), 2)
+}

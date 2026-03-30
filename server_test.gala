@@ -716,7 +716,7 @@ func TestHTTPErrorNewHTTPError(t T) T {
 
 func TestHTTPErrorWithInternal(t T) T {
     val internalErr error = nil
-    val err = NewHTTPErrorWithInternal(StatusInternalError(), "db error", internalErr)
+    val err = NewHTTPError(StatusInternalError(), "db error", internalErr)
     val t1 = Eq(t, err.Code(), 500)
     return Eq(t1, err.Msg(), "db error")
 }

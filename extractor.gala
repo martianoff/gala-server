@@ -23,35 +23,29 @@ import (
 
 // PathParam extracts a required path parameter by name.
 // Returns Failure if the parameter is missing.
-func PathParam(req Request, name string) Try[string] {
-    val v = req.Param(name)
-    return v match {
+func PathParam(req Request, name string) Try[string] =
+    req.Param(name) match {
         case Some(s) => Success(s)
         case None() => Failure[string](errors.New(s"missing path parameter: $name"))
     }
-}
 
 // PathParamInt extracts a required path parameter as an int.
 // Returns Failure if the parameter is missing or not a valid integer.
-func PathParamInt(req Request, name string) Try[int] {
-    val v = req.Param(name)
-    return v match {
+func PathParamInt(req Request, name string) Try[int] =
+    req.Param(name) match {
         case Some(s) => Try(() => strconv.Atoi(s))
         case None() => Failure[int](errors.New(s"missing path parameter: $name"))
     }
-}
 
 // --- Query Parameter Extractors ---
 
 // QueryRequired extracts a required query parameter by name.
 // Returns Failure if the parameter is missing.
-func QueryRequired(req Request, name string) Try[string] {
-    val v = req.QueryParam(name)
-    return v match {
+func QueryRequired(req Request, name string) Try[string] =
+    req.QueryParam(name) match {
         case Some(s) => Success(s)
         case None() => Failure[string](errors.New(s"missing required query parameter: $name"))
     }
-}
 
 // QueryInt extracts a query parameter as an int, returning a default if missing or invalid.
 func QueryInt(req Request, name string, default_ int) int =
@@ -61,13 +55,11 @@ func QueryInt(req Request, name string, default_ int) int =
 
 // HeaderRequired extracts a required header by name.
 // Returns Failure if the header is missing.
-func HeaderRequired(req Request, name string) Try[string] {
-    val v = req.Header(name)
-    return v match {
+func HeaderRequired(req Request, name string) Try[string] =
+    req.Header(name) match {
         case Some(s) => Success(s)
         case None() => Failure[string](errors.New(s"missing required header: $name"))
     }
-}
 
 // --- JSON Body Extractor ---
 
