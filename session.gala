@@ -122,8 +122,7 @@ func sessionFromCtx(r Request) Option[*httpcore.SessionData] {
 func (r Request) SessionGet(key string) Option[string] {
     return sessionFromCtx(r).FlatMap((session) => {
         val v, found = session.Get(key)
-        if found { return Some(v) }
-        return None[string]()
+        return When(found, v)
     })
 }
 

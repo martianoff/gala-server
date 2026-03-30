@@ -24,12 +24,7 @@ struct SSEEvent(Event string, Data string, Id string, Retry int)
 // SSE creates an SSE response from an array of events.
 // Sets Content-Type to text/event-stream with appropriate caching headers.
 func SSE(events Array[SSEEvent]) Response {
-    val body = httpcore.NewSSEResponse(events.Map((e) => httpcore.SSEEvent{
-        Event: e.Event,
-        Data:  e.Data,
-        Id:    e.Id,
-        Retry: e.Retry,
-    }).ToGoSlice()).Body
+    val body = httpcore.NewSSEResponse(events.Map((e) => httpcore.SSEEvent(Event = e.Event, Data = e.Data, Id = e.Id, Retry = e.Retry)).ToGoSlice()).Body
     return NewResponse(StatusOk()).WithBody(body).
         WithHeader("Content-Type", "text/event-stream").
         WithHeader("Cache-Control", "no-cache").

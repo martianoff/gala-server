@@ -293,15 +293,15 @@ func (resp Response) ToBridge() *httpcore.BridgeResponse {
         case None() => httpcore.NewBridgeResponse(resp.Code(), resp.Body)
     }
     resp.Headers.ForEach((pair) => br.SetHeader(pair.V1, pair.V2))
-    resp.Cookies.ForEach((c) => br.AddCookie(httpcore.BridgeCookie{
-        Name:     c.Name,
-        Value:    c.Value,
-        Path:     c.Path,
-        Domain:   c.Domain,
-        MaxAge:   c.MaxAge,
-        Secure:   c.Secure,
-        HttpOnly: c.HttpOnly,
-        SameSite: c.SameSite,
-    }))
+    resp.Cookies.ForEach((c) => br.AddCookie(httpcore.BridgeCookie(
+        Name = c.Name,
+        Value = c.Value,
+        Path = c.Path,
+        Domain = c.Domain,
+        MaxAge = c.MaxAge,
+        Secure = c.Secure,
+        HttpOnly = c.HttpOnly,
+        SameSite = c.SameSite,
+    )))
     return br
 }
