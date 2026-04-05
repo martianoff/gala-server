@@ -105,3 +105,11 @@ gala_go_test(
     lib_srcs = _GALA_SRCS,
     deps = _TEST_DEPS,
 )
+
+gala_go_test(
+    name = "readme_test",
+    srcs = ["readme_test.gala"],
+    pkg = "server",
+    lib_srcs = _GALA_SRCS,
+    deps = _TEST_DEPS,
+)

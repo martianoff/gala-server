@@ -236,6 +236,59 @@ func HTTPDo(method, url string) HTTPFullResult {
 	}
 }
 
+// HTTPGetWithCookie performs a GET with a cookie header.
+func HTTPGetWithCookie(url, cookieName, cookieValue string) HTTPFullResult {
+	client := &http.Client{}
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return HTTPFullResult{Status: 0, Body: "error: " + err.Error()}
+	}
+	req.AddCookie(&http.Cookie{Name: cookieName, Value: cookieValue})
+	resp, err := client.Do(req)
+	if err != nil {
+		return HTTPFullResult{Status: 0, Body: "error: " + err.Error()}
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	headers := make(map[string]string)
+	for k := range resp.Header {
+		headers[k] = resp.Header.Get(k)
+	}
+	return HTTPFullResult{
+		Status:  resp.StatusCode,
+		Body:    string(body),
+		Headers: headers,
+		Cookies: resp.Cookies(),
+	}
+}
+
+// HTTPPostWithCookie performs a POST with a cookie header.
+func HTTPPostWithCookie(url, contentType, body, cookieName, cookieValue string) HTTPFullResult {
+	client := &http.Client{}
+	req, err := http.NewRequest("POST", url, strings.NewReader(body))
+	if err != nil {
+		return HTTPFullResult{Status: 0, Body: "error: " + err.Error()}
+	}
+	req.Header.Set("Content-Type", contentType)
+	req.AddCookie(&http.Cookie{Name: cookieName, Value: cookieValue})
+	resp, err := client.Do(req)
+	if err != nil {
+		return HTTPFullResult{Status: 0, Body: "error: " + err.Error()}
+	}
+	defer resp.Body.Close()
+	respBody, _ := io.ReadAll(resp.Body)
+	headers := make(map[string]string)
+	for k := range resp.Header {
+		headers[k] = resp.Header.Get(k)
+	}
+	return HTTPFullResult{
+		Status:  resp.StatusCode,
+		Body:    string(respBody),
+		Headers: headers,
+		Cookies: resp.Cookies(),
+	}
+}
+
 // HeaderValue returns a header value from HTTPFullResult.
 func (r HTTPFullResult) HeaderValue(key string) string {
 	return r.Headers[key]

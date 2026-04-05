@@ -7,11 +7,14 @@ A fast, immutable HTTP server library for the [GALA language](https://github.com
 - **Immutable builder pattern** -- every method returns a new Server (no mutation, no races)
 - **Sealed types** -- Method and StatusCode are exhaustive, pattern-matchable enums
 - **35+ built-in filters** -- logging, auth (Bearer, Basic, JWT, API key), CORS, CSRF, rate limiting, gzip, proxy, security headers, circuit breaker, retry, bulkhead, ETag, caching, and more
-- **Filter algebra** -- compose, conditionally apply, or skip filters with `ComposeFilters`, `When`, `Skip`
+- **Filter algebra** -- compose, conditionally apply, or skip filters with `ComposeFilters`, `WhenFilter`, `Skip`
 - **Type-safe extractors** -- `PathParam`, `QueryRequired`, `HeaderRequired`, `BodyAs[T]` returning `Try[T]`
 - **TLS/HTTPS** -- `ListenTLS`, `ListenGracefulTLS` with cert/key
 - **Server-Sent Events** -- `SSE()` and `SSEStream()` for real-time push
-- **Resilience** -- `CircuitBreaker` (3-state), `Retry` / `RetryWithBackoff`, `Bulkhead` concurrency limiter
+- **Resilience** -- `CircuitBreaker` (3-state), `RetryFilter` / `RetryFilterWithBackoff`, `Bulkhead` concurrency limiter
+- **Prometheus metrics** -- `MetricsFilter` tracks per-route request count, latency, status codes; `WithMetricsEndpoint` exposes `/metrics`
+- **Session management** -- cookie-based in-memory sessions with `SessionFilter`, `SessionGet/Set/Delete`, configurable expiry
+- **Sliding window rate limiter** -- `RateLimitSlidingWindow` and `RateLimitSlidingWindowPerIP` for accurate per-window throttling
 - **Content negotiation** -- `Accepts`, `AcceptsJSON`, `Negotiate` for multi-format APIs
 - **Health & readiness** -- `WithHealthCheck`, `WithReadiness` for container orchestration
 - **Error mapping** -- `WithErrorMapper` converts domain errors to HTTP responses
@@ -26,20 +29,49 @@ A fast, immutable HTTP server library for the [GALA language](https://github.com
 ```gala
 package main
 
-import . "martianoff/gala-server"
+import (
+    . "martianoff/gala-server"
+    "time"
+)
 
 func main() {
+    // Prometheus metrics collector
+    val stats = NewMetrics()
+
+    // Cookie-based session store
+    val sessions = NewSessions("my-secret-key").
+        WithCookieName("sid").
+        WithMaxAge(3600)
+
     val server = NewServer().
         WithName("My API").
         WithPort(8080).
+        WithBasePath("/api").
+        WithHealthCheck("/health").
+        WithReadiness("/ready", () => true).
+        WithMetricsEndpoint("/metrics", stats).
+        // Routes
         GET("/", (req) => Ok("Hello, GALA!")).
         GET("/users/{id}", (req) => {
             val id = req.Param("id").GetOrElse("0")
-            return JsonResponse(s"{\"id\": \"$id\"}")
+            return JsonResponse(s"{\"id\": \"$id\", \"name\": \"User $id\"}")
         }).
+        GET("/profile", (req) => {
+            val name = req.SessionGet("username").GetOrElse("Guest")
+            return Ok(s"Hello, $name!")
+        }).
+        POST("/login", (req) => {
+            req.SessionSet("username", "Alice")
+            return Ok("Logged in")
+        }).
+        // Global filters
         WithFilter(Logger()).
         WithFilter(Recovery()).
-        WithFilter(Cors())
+        WithFilter(Cors()).
+        WithFilter(MetricsFilter(stats)).
+        WithFilter(SessionFilter(sessions)).
+        WithFilter(RateLimitSlidingWindowPerIP(100, 1 * time.Minute)).
+        WithFilter(CircuitBreaker(maxFailures = 5, resetTimeout = 30 * time.Second))
 
     server.ListenGraceful()
 }
@@ -85,7 +117,7 @@ server.GET("/events", (req) => {
 server.WithFilter(CircuitBreaker(maxFailures = 5, resetTimeout = 30 * time.Second))
 
 // Retry with exponential backoff
-server.WithFilter(RetryWithBackoff(maxRetries = 3, initialBackoff = 100 * time.Millisecond))
+server.WithFilter(RetryFilterWithBackoff(maxRetries = 3, initialBackoff = 100 * time.Millisecond))
 
 // Bulkhead: limit concurrent requests
 server.WithFilter(Bulkhead(maxConcurrent = 100))
@@ -100,10 +132,65 @@ Compose and conditionally apply filters:
 val secured = ComposeFilters(Auth(), RateLimit(100.0, 10.0))
 
 // Apply filter only when predicate is true
-val authWhenNotHealth = When((req) => req.Path() != "/health", Auth())
+val authWhenNotHealth = WhenFilter((req) => req.Path() != "/health", Auth())
 
 // Skip filter for specific paths
 val logExceptHealth = Skip(Logger(), "/health", "/ready")
+```
+
+## Prometheus Metrics
+
+```gala
+val stats = NewMetrics()
+
+val server = NewServer().
+    WithMetricsEndpoint("/metrics", stats).
+    GET("/users", userHandler).
+    WithFilter(MetricsFilter(stats))
+
+// GET /metrics returns Prometheus text format:
+//   gala_requests_total 42
+//   gala_responses_total{status="200"} 38
+//   gala_route_requests_total{route="/users"} 15
+//   gala_route_latency_avg_ms{route="/users"} 2.34
+//   gala_uptime_seconds 3600
+```
+
+## Session Management
+
+```gala
+val sessions = NewSessions("secret-key").
+    WithCookieName("sid").
+    WithMaxAge(3600).
+    WithSecure(true)
+
+server.
+    WithFilter(SessionFilter(sessions)).
+    GET("/profile", (req) => {
+        val name = req.SessionGet("username").GetOrElse("Guest")
+        return Ok(s"Hello, $name!")
+    }).
+    POST("/login", (req) => {
+        req.SessionSet("username", "Alice")
+        return Ok("Logged in")
+    }).
+    POST("/logout", (req) => {
+        req.SessionDelete("username")
+        return Ok("Logged out")
+    })
+
+// Periodic cleanup of expired sessions
+sessions.Cleanup(1 * time.Hour)
+```
+
+## Sliding Window Rate Limiter
+
+```gala
+// Global: 1000 requests per minute
+server.WithFilter(RateLimitSlidingWindow(1000, 1 * time.Minute))
+
+// Per-IP: 100 requests per minute per client
+server.WithFilter(RateLimitSlidingWindowPerIP(100, 1 * time.Minute))
 ```
 
 ## Content Negotiation
@@ -127,7 +214,7 @@ server.
 
 ## Prerequisites
 
-- [GALA](https://github.com/martianoff/gala) compiler (v0.23.0+)
+- [GALA](https://github.com/martianoff/gala) compiler (v0.25.3+)
 - [Go SDK](https://go.dev/dl/) 1.25+ on PATH
 - [Bazel](https://github.com/bazelbuild/bazelisk) (via Bazelisk)
 - GALA toolchain cloned as a sibling directory: `git clone https://github.com/martianoff/gala.git ../gala_simple`
@@ -138,8 +225,8 @@ server.
 # Build library
 bazel build //:gala-server
 
-# Run all tests (5 test targets, 300+ test functions)
-bazel test //:server_test //:filter_test //:integration_test //:extractor_test //:sse_test
+# Run all tests (7 test targets, 330+ test functions)
+bazel test //:server_test //:filter_test //:integration_test //:extractor_test //:sse_test //:metrics_test //:session_test //:readme_test
 
 # Run a specific test target
 bazel test //:server_test
@@ -202,6 +289,8 @@ gala-server/
   request.gala        # Request API (params, query, headers, body, context, content negotiation)
   response.gala       # Response constructors and builders (including Negotiate)
   filter.gala         # All built-in filters (35+) including resilience and filter algebra
+  metrics.gala        # Prometheus metrics collector and MetricsFilter
+  session.gala        # Cookie-based session management (SessionFilter, SessionGet/Set/Delete)
   extractor.gala      # Type-safe extractors (PathParam, QueryRequired, BodyAs, etc.)
   sse.gala            # Server-Sent Events (SSEEvent, SSE, SSEStream)
   group.gala          # Route groups with scoped filters
@@ -247,7 +336,7 @@ The GALA layer is purely functional and immutable. The httpcore bridge is a thin
 
 ## Test Coverage
 
-300+ tests across 5 test targets — **all passing** via `bazel test`:
+330+ tests across 7 test targets — **all passing** via `bazel test`:
 
 - **Server builder**: NewServer, WithPort, WithName, WithDebug, WithBanner, immutability, Any method
 - **Response constructors**: all 16 status codes, content types (JSON, HTML, XML, Text), JSONP, blobs, redirects, streams
@@ -258,5 +347,8 @@ The GALA layer is purely functional and immutable. The httpcore bridge is a thin
 - **Groups**: nesting, composition, filter scoping, filter isolation
 - **HTTPError**: structured errors, JSON responses
 - **Route naming**: URL generation with parameter substitution
+- **Metrics**: MetricsFilter recording, Prometheus exposition endpoint, concurrent counter safety
+- **Sessions**: SessionFilter lifecycle, SessionGet/Set/Delete, cleanup, cookie configuration
+- **Sliding window**: RateLimitSlidingWindow and per-IP variant, window expiry, burst accuracy
 - **JWT**: token creation, validation, expiry, claims, signature verification
 - **Integration**: full HTTP request/response cycle with real server

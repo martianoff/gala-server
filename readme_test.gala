@@ -1,0 +1,255 @@
+package server
+
+import (
+    . "martianoff/gala/test"
+    "martianoff/gala/concurrent"
+    "github.com/martianoff/gala-server/httpcore"
+    "time"
+)
+
+// ============================================================================
+// README Quick Start — Integration Tests
+// ============================================================================
+//
+// These tests validate the examples from README.md by starting real HTTP
+// servers and making actual requests.
+
+// Port counter for unique test ports.
+val readmePortCounter = httpcore.NewAtomicCounter()
+
+// --- Helper: start a server on a unique port ---
+
+func startOnPort(s Server) string {
+    val sb = httpcore.NewServerBuilder()
+    s.root.Routes.ForEach((route) => {
+        val handler = applyFilters(route.Handler, s.root.Filters)
+        sb.AddRoute(route.Method.Name(), route.Pattern, makeBridgeHandler(handler, s.ErrorHandler, s.errorMapper))
+    })
+
+    val port = 19100 + readmePortCounter.Next()
+    val addr = s":$port"
+    concurrent.Spawn(() => { sb.ListenAndServe(addr) })
+    time.Sleep(100 * time.Millisecond)
+    return s"http://localhost:$port"
+}
+
+// --- Shared README server builder ---
+
+func readmeServer(stats Metrics, sessions Sessions) Server =
+    NewServer().
+        WithName("README Test").
+        WithMetricsEndpoint("/metrics", stats).
+        GET("/", (req) => Ok("Hello, GALA!")).
+        GET("/users/{id}", (req) => {
+            val id = req.Param("id").GetOrElse("0")
+            return JsonResponse(s"{\"id\": \"$id\", \"name\": \"User $id\"}")
+        }).
+        GET("/profile", (req) => {
+            val name = req.SessionGet("username").GetOrElse("Guest")
+            return Ok(s"Hello, $name!")
+        }).
+        POST("/login", (req) => {
+            req.SessionSet("username", "Alice")
+            return Ok("Logged in")
+        }).
+        WithFilter(Logger()).
+        WithFilter(Recovery()).
+        WithFilter(Cors()).
+        WithFilter(MetricsFilter(stats)).
+        WithFilter(SessionFilter(sessions))
+
+// ============================================================================
+// Test: Basic Routes
+// ============================================================================
+
+func TestReadmeHelloRoute(t T) T {
+    val stats = NewMetrics()
+    val sessions = NewSessions("my-secret-key").WithCookieName("sid").WithMaxAge(3600)
+    val base = startOnPort(readmeServer(stats, sessions))
+
+    val r = httpcore.HTTPGet(s"$base/")
+    val t1 = Eq(t, r.Status, 200)
+    return Eq(t1, r.Body, "Hello, GALA!")
+}
+
+func TestReadmeUserRoute(t T) T {
+    val stats = NewMetrics()
+    val sessions = NewSessions("my-secret-key").WithCookieName("sid").WithMaxAge(3600)
+    val base = startOnPort(readmeServer(stats, sessions))
+
+    val r = httpcore.HTTPGet(s"$base/users/42")
+    val t1 = Eq(t, r.Status, 200)
+    return Eq(t1, r.Body, "{\"id\": \"42\", \"name\": \"User 42\"}")
+}
+
+// ============================================================================
+// Test: Metrics Endpoint (Prometheus format)
+// ============================================================================
+
+func TestReadmeMetricsEndpoint(t T) T {
+    val stats = NewMetrics()
+    val sessions = NewSessions("my-secret-key").WithCookieName("sid").WithMaxAge(3600)
+    val base = startOnPort(readmeServer(stats, sessions))
+
+    // Generate some traffic first
+    httpcore.HTTPGet(s"$base/")
+    httpcore.HTTPGet(s"$base/users/1")
+    httpcore.HTTPGet(s"$base/users/2")
+
+    // Now call the metrics endpoint
+    val r = httpcore.HTTPDo("GET", s"$base/metrics")
+    val t1 = Eq(t, r.Status, 200)
+    val t2 = Contains(t1, r.HeaderValue("Content-Type"), "text/plain")
+
+    // Verify Prometheus format contains expected metric names
+    val t3 = Contains(t2, r.Body, "gala_requests_total")
+    val t4 = Contains(t3, r.Body, "gala_responses_total")
+    val t5 = Contains(t4, r.Body, "gala_route_requests_total")
+    val t6 = Contains(t5, r.Body, "gala_route_latency_avg_ms")
+    val t7 = Contains(t6, r.Body, "gala_route_latency_max_ms")
+    return Contains(t7, r.Body, "gala_uptime_seconds")
+}
+
+func TestReadmeMetricsCountsRequests(t T) T {
+    val stats = NewMetrics()
+    val sessions = NewSessions("my-secret-key").WithCookieName("sid").WithMaxAge(3600)
+    val base = startOnPort(readmeServer(stats, sessions))
+
+    // Before any requests
+    val before = stats.TotalRequests()
+
+    // Make 3 requests
+    httpcore.HTTPGet(s"$base/")
+    httpcore.HTTPGet(s"$base/users/1")
+    httpcore.HTTPGet(s"$base/users/2")
+
+    // Metrics should have recorded all 3
+    val after = stats.TotalRequests()
+    return Eq(t, after - before, int64(3))
+}
+
+func TestReadmeMetricsShowsRouteBreakdown(t T) T {
+    val stats = NewMetrics()
+    val sessions = NewSessions("my-secret-key").WithCookieName("sid").WithMaxAge(3600)
+    val base = startOnPort(readmeServer(stats, sessions))
+
+    // Hit a specific route multiple times
+    httpcore.HTTPGet(s"$base/users/1")
+    httpcore.HTTPGet(s"$base/users/2")
+
+    val r = httpcore.HTTPGet(s"$base/metrics")
+    val t1 = Contains(t, r.Body, "gala_route_requests_total")
+    return Contains(t1, r.Body, "gala_route_latency_avg_ms")
+}
+
+func TestReadmeMetricsStatusCodes(t T) T {
+    val stats = NewMetrics()
+    val sessions = NewSessions("my-secret-key").WithCookieName("sid").WithMaxAge(3600)
+    val base = startOnPort(readmeServer(stats, sessions))
+
+    // Generate a 200 response
+    httpcore.HTTPGet(s"$base/")
+
+    val r = httpcore.HTTPGet(s"$base/metrics")
+    // Should show status 200 in responses
+    return Contains(t, r.Body, "gala_responses_total{status=\"200\"}")
+}
+
+// ============================================================================
+// Test: Session Flow (login -> profile with cookie)
+// ============================================================================
+
+func TestReadmeSessionLoginAndProfile(t T) T {
+    val stats = NewMetrics()
+    val sessions = NewSessions("my-secret-key").WithCookieName("sid").WithMaxAge(3600)
+    val base = startOnPort(readmeServer(stats, sessions))
+
+    // Before login, profile should show "Guest"
+    val r1 = httpcore.HTTPGet(s"$base/profile")
+    val t1 = Eq(t, r1.Status, 200)
+    val t2 = Eq(t1, r1.Body, "Hello, Guest!")
+
+    // Login — get the session cookie
+    val r2 = httpcore.HTTPDo("POST", s"$base/login")
+    val t3 = Eq(t2, r2.Status, 200)
+    val t4 = Eq(t3, r2.Body, "Logged in")
+    val t5 = IsTrue(t4, r2.CookieCount() > 0)
+    val sessionCookie = r2.CookieValue(0)
+    val cookieName = r2.CookieName(0)
+    val t6 = Eq(t5, cookieName, "sid")
+
+    // Profile with session cookie should show "Alice"
+    val r3 = httpcore.HTTPGetWithCookie(s"$base/profile", "sid", sessionCookie)
+    val t7 = Eq(t6, r3.Status, 200)
+    return Eq(t7, r3.Body, "Hello, Alice!")
+}
+
+func TestReadmeSessionCookieSettings(t T) T {
+    val stats = NewMetrics()
+    val sessions = NewSessions("my-secret-key").WithCookieName("sid").WithMaxAge(3600)
+    val base = startOnPort(readmeServer(stats, sessions))
+
+    // Login to get a session cookie
+    val r = httpcore.HTTPDo("POST", s"$base/login")
+    val t1 = IsTrue(t, r.CookieCount() > 0)
+    val t2 = Eq(t1, r.CookieName(0), "sid")
+    // Cookie value should be non-empty (session ID)
+    return IsTrue(t2, r.CookieValue(0) != "")
+}
+
+// ============================================================================
+// Test: CORS Headers (from WithFilter(Cors()))
+// ============================================================================
+
+func TestReadmeCorsHeaders(t T) T {
+    val stats = NewMetrics()
+    val sessions = NewSessions("my-secret-key").WithCookieName("sid").WithMaxAge(3600)
+    val base = startOnPort(readmeServer(stats, sessions))
+
+    val r = httpcore.HTTPDo("GET", s"$base/")
+    return Eq(t, r.HeaderValue("Access-Control-Allow-Origin"), "*")
+}
+
+// ============================================================================
+// Test: Sliding Window Rate Limiter
+// ============================================================================
+
+func TestReadmeRateLimiterRejectsExcess(t T) T {
+    // Create a server with a very low rate limit to test rejection
+    val s = NewServer().
+        GET("/limited", (req) => Ok("ok")).
+        WithFilter(RateLimitSlidingWindow(3, 1 * time.Minute))
+
+    val base = startOnPort(s)
+
+    // First 3 requests should succeed
+    val r1 = httpcore.HTTPGet(s"$base/limited")
+    val t1 = Eq(t, r1.Status, 200)
+    val r2 = httpcore.HTTPGet(s"$base/limited")
+    val t2 = Eq(t1, r2.Status, 200)
+    val r3 = httpcore.HTTPGet(s"$base/limited")
+    val t3 = Eq(t2, r3.Status, 200)
+
+    // 4th request should be rate limited (429)
+    val r4 = httpcore.HTTPGet(s"$base/limited")
+    return Eq(t3, r4.Status, 429)
+}
+
+func TestReadmeRateLimiterPerIP(t T) T {
+    // Test per-IP variant
+    val s = NewServer().
+        GET("/limited", (req) => Ok("ok")).
+        WithFilter(RateLimitSlidingWindowPerIP(2, 1 * time.Minute))
+
+    val base = startOnPort(s)
+
+    // First 2 should pass
+    val r1 = httpcore.HTTPGet(s"$base/limited")
+    val t1 = Eq(t, r1.Status, 200)
+    val r2 = httpcore.HTTPGet(s"$base/limited")
+    val t2 = Eq(t1, r2.Status, 200)
+
+    // 3rd should be rejected (per-IP limit of 2)
+    val r3 = httpcore.HTTPGet(s"$base/limited")
+    return Eq(t2, r3.Status, 429)
+}
