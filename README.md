@@ -283,7 +283,7 @@ See [`examples/hello/README.md`](examples/hello/README.md) for the full list of 
 
 ## Live TUI Dashboard
 
-The `tui/` subpackage wraps a server with a request-capturing filter and renders a live Elm-style dashboard — header with rolling req/s and total counts, a 60-second throughput sparkline, and a tailing log panel showing every request's method, path, status, and latency. Press `q` or Ctrl+C to quit.
+The `tui/` subpackage wraps a server with a request-capturing filter and renders a live Elm-style dashboard. Header shows live req/s, p95 latency, total request count, and uptime. Two sparklines track throughput (req/s) and p95 latency (ms) over the last 60 seconds. A sortable DataTable shows per-route stats — top 10 routes by hits with average latency and error percentage. A `2xx/3xx/4xx/5xx` BarChart histogram tracks status-code distribution. The log panel tails every request's method, path, status, and latency. Press `q` or Ctrl+C to quit.
 
 **Prerequisite:** clone the [gala-tui](https://github.com/martianoff/gala-tui) repository as a sibling of `gala-server`:
 
@@ -346,9 +346,9 @@ gala-server/
   httpcore/            # Go bridge (~500 lines) — the only Go code
     httpcore.go        # BridgeRequest, BridgeResponse, ServerBuilder, CircuitBreaker, Semaphore
     testing.go         # TestRequestBuilder for unit tests
-  tui/                 # Optional live TUI dashboard (pure Go, calls gala_tui)
-    bus.go             # Thread-safe event bus from server goroutines to TUI
-    dashboard.go       # Elm-style model/update/view + RunWithDashboard entry
+  tui/                 # Optional live TUI dashboard powered by gala_tui
+    bus.go             # Thread-safe event bus from server goroutines to TUI (Go)
+    dashboard.gala     # Elm-style model/update/view + RunWithDashboard entry
   server_test.gala     # Server, response, request unit tests
   filter_test.gala     # Filter behavior tests
   integration_test.gala # HTTP-level integration tests
