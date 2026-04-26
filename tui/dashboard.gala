@@ -11,12 +11,32 @@ import (
 )
 
 // =============================================================================
+// Event — what each request appends to the bus for live display.
+// =============================================================================
+
+struct Event(
+    Method    string,
+    Path      string,
+    Status    int,
+    LatencyMs int64,
+    At        time.Time,
+)
+
+func NewEvent(method string, path string, status int, latencyMs int64) Event = Event(
+    Method    = method,
+    Path      = path,
+    Status    = status,
+    LatencyMs = latencyMs,
+    At        = time.Now(),
+)
+
+// =============================================================================
 // Filter — captures request events into the bus.
 // =============================================================================
 
 // TUIFilter returns a server.Filter that records each request's method, path,
-// status, and latency to the given Bus for live dashboard display.
-func TUIFilter(b *Bus) server.Filter =
+// status, and latency to the given EventBus for live dashboard display.
+func TUIFilter(b EventBus[Event]) server.Filter =
     (req server.Request, next server.Handler) => {
         val start = time.Now()
         return next(req).Map((resp) => {
@@ -40,7 +60,7 @@ struct RouteStats(
 )
 
 struct DashboardModel(
-    Bus          *Bus,
+    Bus          EventBus[Event],
     RPS          Array[int],            // last 60s, samples-per-second
     PerSecond    int,                    // current second's accumulator
     LastSecond   int64,
@@ -59,7 +79,7 @@ struct DashboardModel(
 
 func zeros(n int) Array[int] = ArrayFromSlice(go_interop.SliceWithSize[int](n))
 
-func NewDashboardModel(b *Bus) DashboardModel = DashboardModel(
+func NewDashboardModel(b EventBus[Event]) DashboardModel = DashboardModel(
     Bus          = b,
     RPS          = zeros(60),
     PerSecond    = 0,
@@ -102,22 +122,27 @@ func updateKey(m DashboardModel, ev KeyEvent) Tuple[DashboardModel, Cmd[Dashboar
 // One pass per drain; each event updates per-route stats, status counts, and
 // the rolling latency window for the current second.
 func drainEvents(m DashboardModel) DashboardModel {
-    val raw = m.Bus.Drain()
-    if len(raw) == 0 {
+    val arr = m.Bus.DrainAll()
+    val drained = arr.Length()
+    if drained == 0 {
         return m
     }
-    val arr = ArrayFromSlice(raw)
-    val newLogs = arr.FoldLeft(m.Logs, (l, e) => l.Info(formatLog(e)))
-    val newCounts = arr.FoldLeft(m.StatusCounts, (cs, e) => bumpStatus(cs, e.Status))
-    val newRoutes = arr.FoldLeft(m.Routes, (rs, e) => bumpRoute(rs, e))
-    val newLats = arr.FoldLeft(m.SecondLats, (acc, e) => acc.Append(int(e.LatencyMs)))
+    // Explicit Event annotation on each lambda param: the transpiler's
+    // analyzer doesn't substitute T=Event through the generic
+    // EventBus[Event].DrainAll() Array[T] chain, so without the annotation
+    // the lambda's `e` is emitted as the unsubstituted type parameter `T`
+    // and Go fails to compile (`undefined: T`).
+    val newLogs = arr.FoldLeft(m.Logs, (l LogPanel, e Event) => l.Info(formatLog(e)))
+    val newCounts = arr.FoldLeft(m.StatusCounts, (cs Array[int], e Event) => bumpStatus(cs, e.Status))
+    val newRoutes = arr.FoldLeft(m.Routes, (rs HashMap[string, RouteStats], e Event) => bumpRoute(rs, e))
+    val newLats = arr.FoldLeft(m.SecondLats, (acc Array[int], e Event) => acc.Append(int(e.LatencyMs)))
     return m.Copy(
-        PerSecond    = m.PerSecond + len(raw),
+        PerSecond    = m.PerSecond + drained,
         Logs         = newLogs,
         StatusCounts = newCounts,
         Routes       = newRoutes,
         SecondLats   = newLats,
-        Total        = m.Total + len(raw),
+        Total        = m.Total + drained,
     )
 }
 
@@ -280,7 +305,7 @@ func footerView() Widget =
 
 // RunDashboard starts the TUI loop in the foreground, draining events from the
 // bus on each 250ms tick. Blocks until the user presses q or Ctrl+C.
-func RunDashboard(b *Bus) DashboardModel {
+func RunDashboard(b EventBus[Event]) DashboardModel {
     val program = Program[DashboardModel, DashboardMsg](
         Initial = NewDashboardModel(b),
         Update  = (m, msg) => DashboardUpdate(m, msg),
@@ -295,7 +320,7 @@ func RunDashboard(b *Bus) DashboardModel {
 // in the foreground. Returns when the user quits the TUI; the HTTP-server
 // goroutine then dies on process exit.
 func RunWithDashboard(s server.Server) {
-    val b = NewBus()
+    val b = NewEventBus[Event]()
     val configured = s.WithFilter(TUIFilter(b))
     val _ = FutureApply[int](() => {
         configured.Listen()
