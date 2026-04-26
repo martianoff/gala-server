@@ -1,7 +1,7 @@
 package main
 
 import (
-    . "martianoff/gala-server"
+    . "github.com/martianoff/gala-server"
     . "martianoff/gala/time_utils"
     "github.com/martianoff/gala-server/tui"
 )
