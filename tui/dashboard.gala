@@ -1,0 +1,300 @@
+package tui
+
+import (
+    "github.com/martianoff/gala-server"
+    . "github.com/martianoff/gala-tui"
+    . "martianoff/gala/collection_immutable"
+    . "martianoff/gala/concurrent"
+    . "martianoff/gala/time_utils"
+    "martianoff/gala/go_interop"
+    "time"
+)
+
+// =============================================================================
+// Filter — captures request events into the bus.
+// =============================================================================
+
+// TUIFilter returns a server.Filter that records each request's method, path,
+// status, and latency to the given Bus for live dashboard display.
+func TUIFilter(b *Bus) server.Filter =
+    (req server.Request, next server.Handler) => {
+        val start = time.Now()
+        return next(req).Map((resp) => {
+            val elapsed = time.Since(start).Milliseconds()
+            b.Push(NewEvent(req.Method().Name(), req.Path(), resp.Code(), elapsed))
+            return resp
+        })
+    }
+
+// =============================================================================
+// Model
+// =============================================================================
+
+// RouteStats is the per-route rollup shown in the dashboard's DataTable.
+struct RouteStats(
+    Method  string,
+    Path    string,
+    Hits    int,
+    TotalMs int64,
+    Errors  int,
+)
+
+struct DashboardModel(
+    Bus          *Bus,
+    RPS          Array[int],            // last 60s, samples-per-second
+    PerSecond    int,                    // current second's accumulator
+    LastSecond   int64,
+    LatencyMs    Array[int],            // last 60s, per-second p95
+    SecondLats   Array[int],            // current second's latency samples
+    StatusCounts Array[int],            // [2xx, 3xx, 4xx, 5xx]
+    Routes       HashMap[string, RouteStats],
+    Logs         LogPanel,
+    Total        int,
+    StartedAt    time.Time,
+)
+
+func zeros(n int) Array[int] = ArrayFromSlice(go_interop.SliceWithSize[int](n))
+
+func NewDashboardModel(b *Bus) DashboardModel = DashboardModel(
+    Bus          = b,
+    RPS          = zeros(60),
+    PerSecond    = 0,
+    LastSecond   = time.Now().Unix(),
+    LatencyMs    = zeros(60),
+    SecondLats   = EmptyArray[int](),
+    StatusCounts = zeros(4),
+    Routes       = EmptyHashMap[string, RouteStats](),
+    Logs         = NewLogPanel(100).Info("dashboard ready — waiting for traffic"),
+    Total        = 0,
+    StartedAt    = time.Now(),
+)
+
+// =============================================================================
+// Messages
+// =============================================================================
+
+sealed type DashboardMsg {
+    case TickMsg()
+    case KeyMsg(Ev KeyEvent)
+}
+
+// =============================================================================
+// Update
+// =============================================================================
+
+func DashboardUpdate(m DashboardModel, msg DashboardMsg) Tuple[DashboardModel, Cmd[DashboardMsg]] = msg match {
+    case KeyMsg(ev) => updateKey(m, ev)
+    case TickMsg()  => (rollOver(drainEvents(m)), NoCmd[DashboardMsg]())
+}
+
+func updateKey(m DashboardModel, ev KeyEvent) Tuple[DashboardModel, Cmd[DashboardMsg]] {
+    if (KeyMatches(ev, "q") || KeyMatches(ev, "ctrl+c")) {
+        return (m, QuitCmd[DashboardMsg]())
+    }
+    return (m, NoCmd[DashboardMsg]())
+}
+
+// drainEvents pulls everything currently in the bus and folds it into the model.
+// One pass per drain; each event updates per-route stats, status counts, and
+// the rolling latency window for the current second.
+func drainEvents(m DashboardModel) DashboardModel {
+    val raw = m.Bus.Drain()
+    if len(raw) == 0 {
+        return m
+    }
+    val arr = ArrayFromSlice(raw)
+    val newLogs = arr.FoldLeft(m.Logs, (l, e) => l.Info(formatLog(e)))
+    val newCounts = arr.FoldLeft(m.StatusCounts, (cs, e) => bumpStatus(cs, e.Status))
+    val newRoutes = arr.FoldLeft(m.Routes, (rs, e) => bumpRoute(rs, e))
+    val newLats = arr.FoldLeft(m.SecondLats, (acc, e) => acc.Append(int(e.LatencyMs)))
+    return m.Copy(
+        PerSecond    = m.PerSecond + len(raw),
+        Logs         = newLogs,
+        StatusCounts = newCounts,
+        Routes       = newRoutes,
+        SecondLats   = newLats,
+        Total        = m.Total + len(raw),
+    )
+}
+
+// rollOver advances the per-second windows when the wall clock has ticked
+// past the current bucket. Computes p95 of the current second's latencies,
+// shifts the sparklines, and resets the per-second accumulators.
+func rollOver(m DashboardModel) DashboardModel {
+    val nowSec = time.Now().Unix()
+    if nowSec == m.LastSecond {
+        return m
+    }
+    val rolledRPS = m.RPS.Drop(1).Append(m.PerSecond)
+    val rolledLat = m.LatencyMs.Drop(1).Append(p95(m.SecondLats))
+    return m.Copy(
+        RPS        = rolledRPS,
+        LatencyMs  = rolledLat,
+        PerSecond  = 0,
+        SecondLats = EmptyArray[int](),
+        LastSecond = nowSec,
+    )
+}
+
+// p95 returns the 95th-percentile value from `samples`, or 0 if empty.
+// Sorts in place is fine; SecondLats is already replaced after each second.
+func p95(samples Array[int]) int {
+    val n = samples.Length()
+    if n == 0 {
+        return 0
+    }
+    val sorted = samples.SortBy((x) => x)
+    val idx = (n * 95) / 100
+    val safe = if (idx >= n) n - 1 else idx
+    return sorted.Get(safe)
+}
+
+func bumpStatus(counts Array[int], code int) Array[int] {
+    val idx = if (code < 300) 0
+        else if (code < 400) 1
+        else if (code < 500) 2
+        else 3
+    return counts.Updated(idx, counts.Get(idx) + 1)
+}
+
+func bumpRoute(rs HashMap[string, RouteStats], e Event) HashMap[string, RouteStats] {
+    val key = s"${e.Method} ${e.Path}"
+    val zero = RouteStats(Method = e.Method, Path = e.Path, Hits = 0, TotalMs = int64(0), Errors = 0)
+    val cur = rs.GetOrElse(key, zero)
+    val isErr = if (e.Status >= 400) 1 else 0
+    return rs.Put(key, cur.Copy(
+        Hits    = cur.Hits + 1,
+        TotalMs = cur.TotalMs + e.LatencyMs,
+        Errors  = cur.Errors + isErr,
+    ))
+}
+
+func formatLog(e Event) string =
+    s"${e.Method} ${e.Path} -> ${e.Status} (${e.LatencyMs}ms)"
+
+// =============================================================================
+// View
+// =============================================================================
+
+// fixedRowOverhead reserves rows for header (3) + charts (8) + footer (1).
+// The remaining height is split 2:1 between the routes/status row and the
+// log tail row (each wrapped in a Border that takes 2 of those rows).
+val fixedRowOverhead = 3 + 8 + 1
+
+func DashboardView(m DashboardModel) Widget =
+    Column(ArrayOf[LayoutChild](
+        Fixed(3, Border(headerView(m))),
+        Fixed(8, Border(chartsRow(m))),
+        Flex(2, Row(ArrayOf[LayoutChild](
+            Flex(3, Border(routesView(m))),
+            Fixed(28, Border(statusView(m))),
+        ))),
+        Flex(1, Border(LogPanelViewTail(m.Logs, logHeight()))),
+        Fixed(1, footerView()),
+    ))
+
+// logHeight returns the per-second log-tail row count. The log panel gets
+// 1/3 of the remaining flex height after the fixed rows, minus 2 for its
+// own border.
+func logHeight() int {
+    val avail = ((TermSize().V2 - fixedRowOverhead) / 3) - 2
+    return if (avail < 1) 1 else avail
+}
+
+func headerView(m DashboardModel) Widget {
+    val rps = if (m.RPS.Length() > 0) m.RPS.Get(m.RPS.Length() - 1) else 0
+    val p95Now = if (m.LatencyMs.Length() > 0) m.LatencyMs.Get(m.LatencyMs.Length() - 1) else 0
+    val uptime = time.Since(m.StartedAt).Round(time.Second).String()
+    return Padding(0, TextStyled(
+        s" GALA Server Dashboard   ${rps} req/s   p95 ${p95Now}ms   ${m.Total} total   uptime ${uptime}",
+        DefaultStyle().WithBold().WithFg(BrightCyan()),
+    ))
+}
+
+// chartsRow shows throughput (req/s) and latency (p95 ms) sparklines side by side.
+func chartsRow(m DashboardModel) Widget =
+    Row(ArrayOf[LayoutChild](
+        Flex(1, Column(ArrayOf[LayoutChild](
+            Fixed(1, Text(" Throughput (req/s, last 60s)")),
+            Flex(1, SparklineStyled(m.RPS, DefaultStyle().WithFg(BrightGreen()))),
+        ))),
+        Flex(1, Column(ArrayOf[LayoutChild](
+            Fixed(1, Text(" Latency p95 (ms, last 60s)")),
+            Flex(1, SparklineStyled(m.LatencyMs, DefaultStyle().WithFg(BrightYellow()))),
+        ))),
+    ))
+
+// routesView renders a sortable DataTable of per-route stats — top 10 by hits.
+func routesView(m DashboardModel) Widget {
+    val rows = topRoutes(m.Routes, 10).Map((rs) => ArrayOf[string](
+        s"${rs.Method} ${rs.Path}",
+        s"${rs.Hits}",
+        s"${avgMs(rs)}ms",
+        s"${errPct(rs)}%",
+    ))
+    val dt = NewDataTable(
+        ArrayOf[string]("Route", "Hits", "Avg", "Err%"),
+        ArrayOf[Constraint](Fill(3), Length(8), Length(8), Length(6)),
+        rows,
+    )
+    return Column(ArrayOf[LayoutChild](
+        Fixed(1, Text(" Top Routes (by hits)")),
+        Flex(1, DataTableView(dt)),
+    ))
+}
+
+func topRoutes(routes HashMap[string, RouteStats], n int) Array[RouteStats] {
+    val all = routes.ToList().Map((kv) => kv.V2).ToArray()
+    return all.SortBy((rs) => -rs.Hits).Take(n)
+}
+
+func avgMs(rs RouteStats) int64 =
+    if (rs.Hits == 0) int64(0) else rs.TotalMs / int64(rs.Hits)
+
+func errPct(rs RouteStats) int =
+    if (rs.Hits == 0) 0 else (rs.Errors * 100) / rs.Hits
+
+// statusView shows the cumulative 2xx/3xx/4xx/5xx histogram.
+func statusView(m DashboardModel) Widget =
+    Column(ArrayOf[LayoutChild](
+        Fixed(1, Text(" Status Codes")),
+        Flex(1, BarChart(ArrayOf[BarChartDatum](
+            BarChartDatum(Label = "2xx", Value = m.StatusCounts.Get(0)),
+            BarChartDatum(Label = "3xx", Value = m.StatusCounts.Get(1)),
+            BarChartDatum(Label = "4xx", Value = m.StatusCounts.Get(2)),
+            BarChartDatum(Label = "5xx", Value = m.StatusCounts.Get(3)),
+        ))),
+    ))
+
+func footerView() Widget =
+    TextStyled(" press q to quit", DefaultStyle().WithDim())
+
+// =============================================================================
+// Run
+// =============================================================================
+
+// RunDashboard starts the TUI loop in the foreground, draining events from the
+// bus on each 250ms tick. Blocks until the user presses q or Ctrl+C.
+func RunDashboard(b *Bus) DashboardModel {
+    val program = Program[DashboardModel, DashboardMsg](
+        Initial = NewDashboardModel(b),
+        Update  = (m, msg) => DashboardUpdate(m, msg),
+        View    = (m) => DashboardView(m),
+    )
+    val sub = TickSub[DashboardMsg](Interval = Milliseconds(250), Make = () => TickMsg())
+    return RunWithSub[DashboardModel, DashboardMsg](program, (ev) => KeyMsg(ev), sub)
+}
+
+// RunWithDashboard is the high-level entry point: wraps the server with
+// TUIFilter, starts Listen() on a background goroutine, and runs the dashboard
+// in the foreground. Returns when the user quits the TUI; the HTTP-server
+// goroutine then dies on process exit.
+func RunWithDashboard(s server.Server) {
+    val b = NewBus()
+    val configured = s.WithFilter(TUIFilter(b))
+    val _ = FutureApply[int](() => {
+        configured.Listen()
+        return 0
+    })
+    val _ = RunDashboard(b)
+}
