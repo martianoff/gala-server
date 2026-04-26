@@ -50,7 +50,11 @@ struct DashboardModel(
     Routes       HashMap[string, RouteStats],
     Logs         LogPanel,
     Total        int,
-    StartedAt    time.Time,
+    // Stored as int64 unix-nanos rather than time.Time. std.Copy uses
+    // reflection and cannot copy time.Time's unexported wall/ext/loc
+    // fields, so any model copy after a tick zeros the timestamp and
+    // the displayed uptime overflows to ~2562047h.
+    StartedAtNs  int64,
 )
 
 func zeros(n int) Array[int] = ArrayFromSlice(go_interop.SliceWithSize[int](n))
@@ -66,7 +70,7 @@ func NewDashboardModel(b *Bus) DashboardModel = DashboardModel(
     Routes       = EmptyHashMap[string, RouteStats](),
     Logs         = NewLogPanel(100).Info("dashboard ready — waiting for traffic"),
     Total        = 0,
-    StartedAt    = time.Now(),
+    StartedAtNs  = time.Now().UnixNano(),
 )
 
 // =============================================================================
@@ -204,7 +208,8 @@ func logHeight() int {
 func headerView(m DashboardModel) Widget {
     val rps = if (m.RPS.Length() > 0) m.RPS.Get(m.RPS.Length() - 1) else 0
     val p95Now = if (m.LatencyMs.Length() > 0) m.LatencyMs.Get(m.LatencyMs.Length() - 1) else 0
-    val uptime = time.Since(m.StartedAt).Round(time.Second).String()
+    val elapsed = time.Duration(time.Now().UnixNano() - m.StartedAtNs)
+    val uptime = elapsed.Round(time.Second).String()
     return Padding(0, TextStyled(
         s" GALA Server Dashboard   ${rps} req/s   p95 ${p95Now}ms   ${m.Total} total   uptime ${uptime}",
         DefaultStyle().WithBold().WithFg(BrightCyan()),
