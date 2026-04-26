@@ -1014,14 +1014,14 @@ func TestNoCacheFilterSetsHeaders(t T) T {
 // ============================================================================
 
 func TestCircuitBreakerAllowsWhenClosed(t T) T {
-    val cb = CircuitBreaker(3, 1 * time.Second, 1)
+    val cb = CircuitBreaker(maxFailures = 3, resetTimeout = 1 * time.Second, halfOpenMax = 1)
     val r = mkReq(req("GET", "/"))
     val resp = cb(r, okHandler).Get()
     return Eq(t, resp.Code(), 200)
 }
 
 func TestCircuitBreakerOpensAfterFailures(t T) T {
-    val cb = CircuitBreaker(2, 10 * time.Second, 1)
+    val cb = CircuitBreaker(maxFailures = 2, resetTimeout = 10 * time.Second, halfOpenMax = 1)
     val failHandler = (r Request) => FutureOf(InternalError("fail"))
     val r = mkReq(req("GET", "/"))
     // First two failures should pass through (recording failures)
