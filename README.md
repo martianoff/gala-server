@@ -281,6 +281,53 @@ curl -H "Authorization: Bearer admin-secret" http://localhost:8080/api/admin/sta
 
 See [`examples/hello/README.md`](examples/hello/README.md) for the full list of test commands.
 
+## Live TUI Dashboard
+
+The `tui/` subpackage wraps a server with a request-capturing filter and renders a live Elm-style dashboard — header with rolling req/s and total counts, a 60-second throughput sparkline, and a tailing log panel showing every request's method, path, status, and latency. Press `q` or Ctrl+C to quit.
+
+**Prerequisite:** clone the [gala-tui](https://github.com/martianoff/gala-tui) repository as a sibling of `gala-server`:
+
+```shell
+# Both repos must be siblings — gala-server's MODULE.bazel uses local_path_override
+git clone https://github.com/martianoff/gala-tui.git ../gala-tui
+```
+
+**Run the dashboard:**
+
+```shell
+bazel run //examples/dashboard
+```
+
+The example wires four routes (`/`, `/hello/{name}`, `/slow`, `/error`) to a server on `:8080` and hands it to `tui.RunWithDashboard(server)`.
+
+**Drive traffic with the bundled load generator** in another terminal:
+
+```shell
+bazel run //examples/loadgen
+# Or with custom pacing / duration:
+bazel run //examples/loadgen -- -url http://localhost:8080 -min-ms 20 -max-ms 200 -duration 30s
+```
+
+`loadgen` picks routes weighted-random from the dashboard example's set, so the sparkline and log tail light up immediately. Flags: `-url`, `-min-ms` / `-max-ms` (random delay range), `-duration` (0 = until interrupted), `-quiet`, `-seed`. Ctrl+C stops it and prints a summary of 2xx/3xx/4xx/5xx counts.
+
+**Use it in your own server:**
+
+```gala
+import (
+    . "martianoff/gala-server"
+    . "martianoff/gala/time_utils"
+    "github.com/martianoff/gala-server/tui"
+)
+
+func main() {
+    val server = NewServer().
+        GET("/", (req) => Ok("hi")).
+        WithFilter(Recovery())
+
+    tui.RunWithDashboard(server)
+}
+```
+
 ## Project Structure
 
 ```
@@ -299,11 +346,16 @@ gala-server/
   httpcore/            # Go bridge (~500 lines) — the only Go code
     httpcore.go        # BridgeRequest, BridgeResponse, ServerBuilder, CircuitBreaker, Semaphore
     testing.go         # TestRequestBuilder for unit tests
+  tui/                 # Optional live TUI dashboard (pure Go, calls gala_tui)
+    bus.go             # Thread-safe event bus from server goroutines to TUI
+    dashboard.go       # Elm-style model/update/view + RunWithDashboard entry
   server_test.gala     # Server, response, request unit tests
   filter_test.gala     # Filter behavior tests
   integration_test.gala # HTTP-level integration tests
   examples/
-    hello/main.gala    # Example application showcasing all features
+    hello/main.gala    # Full-feature demo (20 routes, 8 filters, auth, SSE, ...)
+    dashboard/main.gala # Live TUI dashboard demo (4 routes + tui.RunWithDashboard)
+    loadgen/main.go    # Random-frequency request generator for driving the dashboard
   docs/                # Documentation
 ```
 
