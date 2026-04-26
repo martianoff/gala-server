@@ -6,10 +6,11 @@ on:
   pull_request:
     branches: [master]
 
-# We pin the gala source-of-truth to a specific commit/branch rather than a
-# released binary. The current 0.35.4 release-binary panics on this project
-# (see https://github.com/martianoff/gala/pull/243). Once 0.35.5 ships with
-# that fix, this can revert to the curl-from-releases install.
+# Pin the gala source-of-truth to a specific commit/branch rather than a
+# released binary. The 0.35.4 release-binary panicked on this project (fixed
+# by https://github.com/martianoff/gala/pull/243). Once 0.35.5 ships with
+# that fix, this can revert to the simpler curl-from-releases install and
+# drop the Bazel setup step.
 env:
   GALA_REF: "master"
 
@@ -25,6 +26,12 @@ jobs:
         with:
           go-version: '1.25'
 
+      - name: Setup Bazel
+        uses: bazel-contrib/setup-bazel@0.8.5
+        with:
+          bazelisk-cache: true
+          repository-cache: true
+
       - name: Checkout gala (compiler source)
         uses: actions/checkout@v4
         with:
@@ -32,10 +39,15 @@ jobs:
           ref: ${{ env.GALA_REF }}
           path: gala-src
 
-      - name: Build gala from source
+      - name: Build gala from source via Bazel
+        # Plain `go build` doesn't work — the parser package is generated
+        # by ANTLR via a Bazel genrule. Build via Bazel so the grammar
+        # gets generated, then copy the binary onto $PATH.
         run: |
           cd gala-src
-          go build -o /usr/local/bin/gala ./cmd/gala
+          bazel build //cmd/gala
+          sudo cp bazel-bin/cmd/gala/gala_/gala /usr/local/bin/gala
+          sudo chmod +x /usr/local/bin/gala
           gala version
 
       - name: Build
