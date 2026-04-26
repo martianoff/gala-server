@@ -1,0 +1,19 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "tui",
+    srcs = [
+        "bus.go",
+        "dashboard.go",
+    ],
+    importpath = "github.com/martianoff/gala-server/tui",
+    deps = [
+        "//:gala-server",
+        "@gala//collection_immutable",
+        "@gala//concurrent",
+        "@gala//std",
+        "@gala//time_utils",
+        "@gala_tui//:gala_tui",
+    ],
+    visibility = ["//visibility:public"],
+)

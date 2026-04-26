@@ -1,0 +1,17 @@
+load("@gala//:gala.bzl", "gala_binary")
+
+gala_binary(
+    name = "dashboard",
+    src = "main.gala",
+    gala_deps = [
+        "//:gala-server",
+    ],
+    deps = [
+        "//httpcore",
+        "//tui",
+        "@gala//collection_immutable",
+        "@gala//concurrent",
+        "@gala//json",
+        "@gala//time_utils",
+    ],
+)

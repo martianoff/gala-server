@@ -125,7 +125,7 @@ func (r Request) AcceptsXML() bool = r.Accepts("application/xml")
 // Deadline returns the Go context deadline if set, or None if no deadline.
 func (r Request) Deadline() Option[time.Time] {
     val t, ok = r.bridge.ContextDeadline()
-    return if (ok) Some(t) else None[time.Time]()
+    return When(ok, t)
 }
 
 // IsCancelled returns true if the request's Go context has been cancelled.
@@ -181,7 +181,7 @@ func (r Request) CtxGet(key string) Option[string] {
 // CtxGetInt retrieves an int value from the per-request context.
 func (r Request) CtxGetInt(key string) Option[int] {
     val v, ok = r.bridge.CtxValues().GetInt(key)
-    return if (ok) Some(v) else None[int]()
+    return When(ok, v)
 }
 
 // CtxSet stores a value in the per-request context.

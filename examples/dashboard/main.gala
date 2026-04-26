@@ -1,0 +1,56 @@
+package main
+
+import (
+    . "martianoff/gala-server"
+    . "martianoff/gala/time_utils"
+    "github.com/martianoff/gala-server/tui"
+)
+
+// =============================================================================
+// GALA Server — TUI Dashboard Example
+// =============================================================================
+//
+// Run:    bazel run //examples/dashboard
+// Quit:   press q or Ctrl+C
+//
+// Open another terminal and curl the routes:
+//   curl http://localhost:8080/
+//   curl http://localhost:8080/hello/world
+//   curl http://localhost:8080/slow
+//   curl http://localhost:8080/error
+//
+// Watch the dashboard light up:
+//   - Header shows live req/s and total request count
+//   - Throughput sparkline tracks the last 60 seconds
+//   - Log panel tails every request with method, path, status, latency
+
+func homeHandler(req Request) Response = Ok("Welcome to GALA Server with live TUI dashboard.\n")
+
+func helloHandler(req Request) Response {
+    val name = req.Param("name").GetOrElse("anon")
+    return Ok(s"Hello, $name!\n")
+}
+
+func slowHandler(req Request) Response {
+    // Simulate work — shows up clearly in the latency column.
+    Sleep(Milliseconds(150))
+    return Ok("done\n")
+}
+
+func errorHandler(req Request) Response = InternalError("simulated 500 for the dashboard demo\n")
+
+func main() {
+    val server = NewServer().
+        WithName("gala-server-tui-demo").
+        WithPort(8080).
+        GET("/", homeHandler).
+        GET("/hello/{name}", helloHandler).
+        GET("/slow", slowHandler).
+        GET("/error", errorHandler).
+        WithFilter(Recovery())
+
+    // Hand the server to the TUI runner. It wraps the server with a request-
+    // capturing filter, starts Listen() on a background goroutine, and runs
+    // the live dashboard on the main goroutine. Returns when the user quits.
+    tui.RunWithDashboard(server)
+}
