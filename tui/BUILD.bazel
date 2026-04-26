@@ -1,40 +1,19 @@
-load("@gala//:gala.bzl", "gala_transpile")
 load("@rules_go//go:def.bzl", "go_library")
-
-# Mixed-source package: dashboard.gala (transpiled) + bus.go (hand-written).
-# bus.go stays Go because sync.Mutex doesn't have a clean GALA equivalent.
-
-gala_transpile(
-    name = "dashboard_transpile",
-    src = "dashboard.gala",
-    out = "dashboard.gen.go",
-    gala_deps = [
-        "//:gala-server",
-        "@gala_tui//:gala_tui",
-    ],
-)
 
 go_library(
     name = "tui",
     srcs = [
         "bus.go",
-        "dashboard.gen.go",
+        "dashboard.go",
     ],
     importpath = "github.com/martianoff/gala-server/tui",
     deps = [
         "//:gala-server",
         "@gala//collection_immutable",
         "@gala//concurrent",
-        "@gala//go_interop",
         "@gala//std",
         "@gala//time_utils",
         "@gala_tui//:gala_tui",
     ],
-    visibility = ["//visibility:public"],
-)
-
-filegroup(
-    name = "tui_gala_sources",
-    srcs = ["dashboard.gala"],
     visibility = ["//visibility:public"],
 )

@@ -6,25 +6,36 @@ on:
   pull_request:
     branches: [master]
 
+# We pin the gala source-of-truth to a specific commit/branch rather than a
+# released binary. The current 0.35.4 release-binary panics on this project
+# (see https://github.com/martianoff/gala/pull/243). Once 0.35.5 ships with
+# that fix, this can revert to the curl-from-releases install.
 env:
-  GALA_VERSION: "0.35.4"
+  GALA_REF: "master"
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout gala-server
+        uses: actions/checkout@v4
 
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
           go-version: '1.25'
 
-      - name: Install GALA CLI
+      - name: Checkout gala (compiler source)
+        uses: actions/checkout@v4
+        with:
+          repository: martianoff/gala
+          ref: ${{ env.GALA_REF }}
+          path: gala-src
+
+      - name: Build gala from source
         run: |
-          curl -fsSL -o /usr/local/bin/gala \
-            "https://github.com/martianoff/gala/releases/download/${GALA_VERSION}/gala-linux-amd64"
-          chmod +x /usr/local/bin/gala
+          cd gala-src
+          go build -o /usr/local/bin/gala ./cmd/gala
           gala version
 
       - name: Build
