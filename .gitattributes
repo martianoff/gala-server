@@ -1,0 +1,6 @@
+# Keep Bazel files LF (gazelle writes LF; avoid autocrlf churn on Windows).
+*.bazel    text eol=lf
+*.bzl      text eol=lf
+BUILD      text eol=lf
+WORKSPACE  text eol=lf
+gala.mod   text eol=lf

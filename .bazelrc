@@ -1,2 +1,10 @@
+# Resolve rules_gala / gala / gala_tui / gala_gazelle from the registry hosted
+# in github.com/martianoff/rules-gala. List it first so it wins for those
+# module names; fall back to the Bazel Central Registry for everything else.
+common --registry=https://raw.githubusercontent.com/martianoff/rules-gala/main/
+common --registry=https://bcr.bazel.build
+
+# Pass GOROOT/PATH to actions so the GALA transpiler can use go/importer to
+# resolve Go package types.
 build --action_env=GOROOT
 build --action_env=PATH
