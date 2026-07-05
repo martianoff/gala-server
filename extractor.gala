@@ -33,7 +33,7 @@ func PathParam(req Request, name string) Try[string] =
 // Returns Failure if the parameter is missing or not a valid integer.
 func PathParamInt(req Request, name string) Try[int] =
     req.Param(name) match {
-        case Some(s) => Try(() => strconv.Atoi(s))
+        case Some(s) => Try(strconv.Atoi(s))
         case None() => Failure[int](errors.New(s"missing path parameter: $name"))
     }
 

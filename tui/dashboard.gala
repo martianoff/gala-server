@@ -322,7 +322,7 @@ func RunDashboard(b EventBus[Event]) DashboardModel {
 func RunWithDashboard(s server.Server) {
     val b = NewEventBus[Event]()
     val configured = s.WithFilter(TUIFilter(b))
-    val _ = FutureApply[int](() => {
+    val _ = Future[int](() => {
         configured.Listen()
         return 0
     })

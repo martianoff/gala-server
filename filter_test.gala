@@ -24,7 +24,7 @@ val okHandler Handler = (r Request) => FutureOf(Ok("ok"))
 val jsonHandler Handler = (r Request) => FutureOf(JsonResponse("{\"status\": \"ok\"}"))
 
 // A handler that panics (for testing Recovery)
-val panicHandler Handler = (r Request) => FutureApply(() => {
+val panicHandler Handler = (r Request) => Future(() => {
     panic("test panic")
     return Ok("never")
 })
@@ -1047,7 +1047,7 @@ func TestRetrySuccessOnFirstAttempt(t T) T {
 
 func TestRetryRetriesOnFailure(t T) T {
     var attempts = 0
-    val flakyHandler = (r Request) => FutureApply[Response](() => {
+    val flakyHandler = (r Request) => Future[Response](() => {
         attempts = attempts + 1
         if attempts < 3 {
             return InternalError("fail")
