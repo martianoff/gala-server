@@ -62,12 +62,12 @@ func (r Request) Param(name string) Option[string] =
 // ParamInt returns a path parameter as an int.
 func (r Request) ParamInt(name string) Option[int] =
     optionFromString(r.bridge.PathValue(name)).FlatMap((v) =>
-        Try(() => strconv.Atoi(v)).ToOption())
+        Try(strconv.Atoi(v)).ToOption())
 
 // ParamInt64 returns a path parameter as an int64.
 func (r Request) ParamInt64(name string) Option[int64] =
     optionFromString(r.bridge.PathValue(name)).FlatMap((v) =>
-        Try(() => strconv.ParseInt(v, 10, 64)).ToOption())
+        Try(strconv.ParseInt(v, 10, 64)).ToOption())
 
 // --- Query Parameters ---
 
@@ -78,7 +78,7 @@ func (r Request) QueryParam(name string) Option[string] =
 // QueryParamInt returns a query parameter as an int.
 func (r Request) QueryParamInt(name string) Option[int] =
     optionFromString(r.bridge.QueryValue(name)).FlatMap((v) =>
-        Try(() => strconv.Atoi(v)).ToOption())
+        Try(strconv.Atoi(v)).ToOption())
 
 // QueryParamDefault returns a query parameter, falling back to a default.
 func (r Request) QueryParamDefault(name string, default_ string) string =

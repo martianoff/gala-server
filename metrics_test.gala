@@ -17,7 +17,7 @@ func metricsReq(method string, path string) Request =
 
 val metricsOkHandler Handler = (r Request) => FutureOf(Ok("ok"))
 
-val metricsSlowHandler Handler = (r Request) => FutureApply(() => {
+val metricsSlowHandler Handler = (r Request) => Future(() => {
     time.Sleep(10 * time.Millisecond)
     return Ok("slow")
 })

@@ -250,7 +250,7 @@ func (s Server) ListenOn(addr string) Try[bool] {
     val sb = s.buildServerBuilder()
     s.runWarmup()
     s.printBanner(addr, false, false)
-    return Try(() => sb.ListenAndServe(addr)).Map((_) => true)
+    return Try(sb.ListenAndServe(addr)).Map((_) => true)
 }
 
 // ListenGraceful starts the HTTP server with graceful shutdown on SIGINT/SIGTERM.
@@ -261,7 +261,7 @@ func (s Server) ListenGracefulOn(addr string) Try[bool] {
     val sb = s.buildServerBuilder()
     s.runWarmup()
     s.printBanner(addr, true, false)
-    return Try(() => sb.ListenAndServeGraceful(addr, s.ShutdownTimeout)).Map((_) => true)
+    return Try(sb.ListenAndServeGraceful(addr, s.ShutdownTimeout)).Map((_) => true)
 }
 
 // --- Listen (TLS/HTTPS) ---
@@ -275,7 +275,7 @@ func (s Server) ListenTLSOn(addr string, certFile string, keyFile string) Try[bo
     val sb = s.buildServerBuilder()
     s.runWarmup()
     s.printBanner(addr, false, true)
-    return Try(() => sb.ListenAndServeTLS(addr, certFile, keyFile)).Map((_) => true)
+    return Try(sb.ListenAndServeTLS(addr, certFile, keyFile)).Map((_) => true)
 }
 
 // ListenGracefulTLS starts the HTTPS server with TLS and graceful shutdown.
@@ -287,7 +287,7 @@ func (s Server) ListenGracefulTLSOn(addr string, certFile string, keyFile string
     val sb = s.buildServerBuilder()
     s.runWarmup()
     s.printBanner(addr, true, true)
-    return Try(() => sb.ListenAndServeTLSGraceful(addr, certFile, keyFile, s.ShutdownTimeout)).Map((_) => true)
+    return Try(sb.ListenAndServeTLSGraceful(addr, certFile, keyFile, s.ShutdownTimeout)).Map((_) => true)
 }
 
 // --- Internal ---
