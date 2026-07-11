@@ -1,6 +1,7 @@
 package server
 
 import (
+    "martianoff/gala/go_builtins"
     . "martianoff/gala/test"
     . "martianoff/gala/concurrent"
     "github.com/martianoff/gala-server/httpcore"
@@ -100,7 +101,7 @@ func TestIntegrationLoggerFilter(t T) T {
 func TestIntegrationRecoveryFilter(t T) T {
     val s = NewServer().
         GET("/panic", (req) => {
-            panic("test panic")
+            go_builtins.Panic("test panic")
             return Ok("never")
         }).
         WithFilter(Recovery())
@@ -199,7 +200,7 @@ func TestIntegrationCustomErrorHandler(t T) T {
     val s = NewServer().
         WithErrorHandler((err) => JsonResponse("{\"error\": \"custom\"}")).
         GET("/fail", (req) => {
-            panic("oops")
+            go_builtins.Panic("oops")
             return Ok("never")
         }).
         WithFilter(Recovery())

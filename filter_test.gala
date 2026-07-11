@@ -1,6 +1,7 @@
 package server
 
 import (
+    "martianoff/gala/go_builtins"
     . "martianoff/gala/test"
     . "martianoff/gala/concurrent"
     . "martianoff/gala/collection_immutable"
@@ -25,7 +26,7 @@ val jsonHandler Handler = (r Request) => FutureOf(JsonResponse("{\"status\": \"o
 
 // A handler that panics (for testing Recovery)
 val panicHandler Handler = (r Request) => Future(() => {
-    panic("test panic")
+    go_builtins.Panic("test panic")
     return Ok("never")
 })
 
