@@ -292,7 +292,7 @@ func SecureWithConfig(
 func BodyLimit(limit string) Filter {
     val maxBytes = httpcore.ParseByteSize(limit)
     return (req Request, next Handler) => {
-        if len(req.Body()) > maxBytes {
+        if req.Body().ByteSize() > maxBytes {
             return FutureOf(
                 NewResponse(StatusCustom(413)).
                     WithBody("Request Entity Too Large"))
@@ -304,7 +304,7 @@ func BodyLimit(limit string) Filter {
 // BodyLimitBytes returns a filter that rejects requests whose body exceeds the given byte count.
 func BodyLimitBytes(maxBytes int) Filter =
     (req Request, next Handler) => {
-        if len(req.Body()) > maxBytes {
+        if req.Body().ByteSize() > maxBytes {
             return FutureOf(
                 NewResponse(StatusCustom(413)).
                     WithBody("Request Entity Too Large"))
