@@ -9,13 +9,18 @@ import (
 // Patterns use Go 1.22+ syntax: "/users/{id}", "/files/{path...}"
 struct Route(Method Method, Pattern string, Handler Handler, Name string)
 
-// liftHandler wraps a sync handler into an async Handler. The handler is
-// synchronous, so it runs on the calling (per-request) goroutine and its result
-// is wrapped in an already-completed Future via FutureOf — nothing crosses a
-// Future's Sendable boundary (spawning it would have captured the unshareable
-// Request), and it avoids an unnecessary extra goroutine per request.
+// liftHandler wraps a sync handler into an async Handler. The handler runs on
+// the calling (per-request) goroutine — nothing crosses a Future's Sendable
+// boundary (spawning it would have captured the unshareable Request). Try
+// catches a panicking handler synchronously and surfaces it as a FAILED Future
+// (preserving the previous spawn-in-a-Future panic semantics), so an upstream
+// Recovery filter can turn it into a 500; a clean result becomes a completed
+// Future via FutureOf.
 func liftHandler(handler func(Request) Response) Handler =
-    (req Request) => FutureOf(handler(req))
+    (req Request) => Try(() => handler(req)) match {
+        case Success(resp) => FutureOf(resp)
+        case Failure(err)  => FutureFailed[Response](err)
+    }
 
 // applyFilters wraps a handler with an Array of filters (outermost first).
 func applyFilters(handler Handler, filters Array[Filter]) Handler =

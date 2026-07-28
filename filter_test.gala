@@ -1048,13 +1048,14 @@ func TestRetrySuccessOnFirstAttempt(t T) T {
 
 func TestRetryRetriesOnFailure(t T) T {
     var attempts = 0
-    val flakyHandler = (r Request) => Future[Response](() => {
+    // The attempt counter is incremented in the (synchronous) handler body and
+    // the result is returned as a completed FutureOf — nothing crosses a Future
+    // boundary, so the mutable counter is never captured into a goroutine. The
+    // retry filter drives attempts sequentially, so the count is well-ordered.
+    val flakyHandler = (r Request) => {
         attempts = attempts + 1
-        if attempts < 3 {
-            return InternalError("fail")
-        }
-        return Ok("recovered")
-    })
+        return if (attempts < 3) FutureOf(InternalError("fail")) else FutureOf(Ok("recovered"))
+    }
     val retry = RetryFilter(3, 1 * time.Millisecond)
     val r = mkReq(req("GET", "/"))
     val resp = retry(r, flakyHandler).Get()
