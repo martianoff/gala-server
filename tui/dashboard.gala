@@ -322,9 +322,10 @@ func RunDashboard(b EventBus[Event]) DashboardModel {
 func RunWithDashboard(s server.Server) {
     val b = NewEventBus[Event]()
     val configured = s.WithFilter(TUIFilter(b))
-    val _ = Future[int](() => {
-        configured.Listen()
-        return 0
-    })
-    val _ = RunDashboard(b)
+    // Run the HTTP server on a background goroutine. Server is a goroutine-safe
+    // handle, so this uses the sanctioned go_interop.Spawn escape hatch rather
+    // than a Future (whose Sendable boundary would reject capturing the Server).
+    // Fire-and-forget: the dashboard runs in the foreground below.
+    go_interop.Spawn(() => { configured.Listen() })
+    RunDashboard(b)
 }

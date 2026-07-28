@@ -520,30 +520,37 @@ func JWTAuthWithConfig(secret string, checkExpiry bool) Filter =
 // Proxy returns a filter that forwards requests to a backend server.
 // The target is the base URL (e.g., "http://backend:3000").
 // This is a terminal filter — it replaces the handler's response with the proxy response.
-func Proxy(target string) Filter {
-    val config = httpcore.NewProxyConfig(target)
-    return proxyFilter(config)
-}
+func Proxy(target string) Filter = proxyFilter(target, 30 * time.Second)
 
 // ProxyWithTimeout returns a proxy filter with a custom timeout.
-func ProxyWithTimeout(target string, timeout time.Duration) Filter {
-    val config = httpcore.NewProxyConfigWithTimeout(target, timeout)
-    return proxyFilter(config)
-}
+func ProxyWithTimeout(target string, timeout time.Duration) Filter = proxyFilter(target, timeout)
 
-func proxyFilter(config *httpcore.ProxyConfig) Filter =
-    (req Request, next Handler) => Future(() => {
-        val headers = httpcore.ProxyRequestHeaders(req.bridge)
-        val result = httpcore.ProxyRequest(config, req.Method().Name(), req.Path(), req.RawQuery(), req.Body(), headers)
-        if result.Error != "" {
-            return BadGateway(result.Error)
-        }
-        // Forward response headers from backend using Go helper
-        val keys = httpcore.ProxyResultHeaderKeys(result)
-        return ArrayOf(keys...).FoldLeft(
-            NewResponse(StatusCustom(result.Status)).WithBody(result.Body),
-            (resp, k) => resp.WithHeader(k, httpcore.ProxyResultHeaderValue(result, k)))
-    })
+// proxyFilter forwards each request to `target`. The proxy work runs off-thread
+// in a Future, so it captures only shareable values: the request's method, path,
+// query and body are snapshotted to strings and its headers to an immutable
+// HashMap BEFORE the boundary (the underlying Go *http.Request must not cross
+// it), and the proxy config is rebuilt inside the goroutine from the plain
+// `target` + `timeout` (a Duration scalar) rather than captured as a pointer.
+func proxyFilter(target string, timeout time.Duration) Filter =
+    (req Request, next Handler) => {
+        val method = req.Method().Name()
+        val path = req.Path()
+        val query = req.RawQuery()
+        val body = req.Body()
+        val headers = HashMapFromGoMap(httpcore.ProxyRequestHeaders(req.bridge))
+        return Future(() => {
+            val config = httpcore.NewProxyConfigWithTimeout(target, timeout)
+            val result = httpcore.ProxyRequest(config, method, path, query, body, headers.ToGoMap())
+            if result.Error != "" {
+                return BadGateway(result.Error)
+            }
+            // Forward response headers from backend using Go helper
+            val keys = httpcore.ProxyResultHeaderKeys(result)
+            return ArrayOf(keys...).FoldLeft(
+                NewResponse(StatusCustom(result.Status)).WithBody(result.Body),
+                (resp, k) => resp.WithHeader(k, httpcore.ProxyResultHeaderValue(result, k)))
+        })
+    }
 
 // ========================
 // Rewrite Filter
@@ -676,28 +683,7 @@ func CircuitBreaker(
 // RetryFilter returns a filter that retries failed requests up to maxRetries times
 // with a fixed backoff duration between attempts.
 func RetryFilter(maxRetries int = 3, backoff time.Duration = 100 * time.Millisecond) Filter =
-    (req Request, next Handler) => Future(() => {
-        var lastResp = InternalError("Request failed: no attempts made")
-        var attempts = 0
-        for attempts <= maxRetries {
-            val result = next(req).Await()
-            if result.IsSuccess() {
-                val resp = result.Get()
-                lastResp = resp
-                if resp.Code() < 500 || attempts >= maxRetries {
-                    return lastResp
-                }
-            } else {
-                lastResp = InternalError("Request failed")
-                if attempts >= maxRetries {
-                    return lastResp
-                }
-            }
-            time.Sleep(backoff)
-            attempts = attempts + 1
-        }
-        return lastResp
-    })
+    (req Request, next Handler) => retryAttempt(req, next, maxRetries, backoff, backoff, 0)
 
 // RetryFilterWithBackoff returns a filter that retries with exponential backoff.
 // The backoff duration doubles after each attempt, capped at maxBackoff.
@@ -706,33 +692,47 @@ func RetryFilterWithBackoff(
     initialBackoff time.Duration = 100 * time.Millisecond,
     maxBackoff time.Duration = 5 * time.Second,
 ) Filter =
-    (req Request, next Handler) => Future(() => {
-        var lastResp = InternalError("Request failed: no attempts made")
-        var attempts = 0
-        var currentBackoff = initialBackoff
-        for attempts <= maxRetries {
-            val result = next(req).Await()
-            if result.IsSuccess() {
-                val resp = result.Get()
-                lastResp = resp
-                if resp.Code() < 500 || attempts >= maxRetries {
-                    return lastResp
-                }
-            } else {
-                lastResp = InternalError("Request failed")
-                if attempts >= maxRetries {
-                    return lastResp
-                }
-            }
-            time.Sleep(currentBackoff)
-            currentBackoff = currentBackoff * 2
-            if currentBackoff > maxBackoff {
-                currentBackoff = maxBackoff
-            }
-            attempts = attempts + 1
-        }
-        return lastResp
-    })
+    (req Request, next Handler) => retryAttempt(req, next, maxRetries, initialBackoff, maxBackoff, 0)
+
+// retryAttempt makes one attempt and recurses (after a backoff) while retries
+// remain. It is composed functionally so nothing crosses a Future boundary:
+// FlatMap / RecoverWith are not Sendable boundaries, so the request and the
+// `next` handler are threaded as parameters rather than captured into a spawned
+// goroutine. A 5xx response or a failure retries until `attempt` reaches
+// maxRetries; the last attempt's response (a 5xx, or a failure Response) is then
+// returned — behaviour-identical to the previous imperative loop.
+func retryAttempt(
+    req Request,
+    next Handler,
+    maxRetries int,
+    backoff time.Duration,
+    maxBackoff time.Duration,
+    attempt int,
+) Future[Response] =
+    next(req)
+        .FlatMap((resp) =>
+            if (resp.Code() < 500 || attempt >= maxRetries) FutureOf(resp)
+            else retryAfterBackoff(req, next, maxRetries, backoff, maxBackoff, attempt))
+        .RecoverWith((_) =>
+            if (attempt >= maxRetries) FutureOf(InternalError("Request failed"))
+            else retryAfterBackoff(req, next, maxRetries, backoff, maxBackoff, attempt))
+
+// retryAfterBackoff sleeps for the current backoff, then recurses with the next
+// (doubled, capped) backoff and an incremented attempt. RetryFilter passes
+// backoff == maxBackoff, so its delay stays fixed; RetryFilterWithBackoff grows
+// it toward maxBackoff.
+func retryAfterBackoff(
+    req Request,
+    next Handler,
+    maxRetries int,
+    backoff time.Duration,
+    maxBackoff time.Duration,
+    attempt int,
+) Future[Response] {
+    time.Sleep(backoff)
+    val nextBackoff = if (backoff * 2 > maxBackoff) maxBackoff else backoff * 2
+    return retryAttempt(req, next, maxRetries, nextBackoff, maxBackoff, attempt + 1)
+}
 
 // ========================
 // Bulkhead (Concurrency Limiter) Filter
