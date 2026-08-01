@@ -6,7 +6,7 @@ import "io"
 import ci "martianoff/gala/collection_immutable"
 import "martianoff/gala/go_interop"
 import "net"
-import "strings"
+import gs "martianoff/gala/strings"
 
 // TCP — a byte-stream server for protocols that are not HTTP.
 //
@@ -102,7 +102,7 @@ func (c Conn) ReadLine(maxBytes int) Option[string] {
     if err != nil || line.ByteSize() > maxBytes {
         return None[string]()
     }
-    return Some(strings.TrimSuffix(strings.TrimSuffix(line, "\n"), "\r"))
+    return Some(gs.TrimSuffix(gs.TrimSuffix(line, "\n"), "\r"))
 }
 
 // ReadExactly reads exactly n bytes and returns them as a string, discarding
