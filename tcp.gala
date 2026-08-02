@@ -30,9 +30,13 @@ import gs "martianoff/gala/strings"
 
 struct Listener(ln net.Listener)
 
-// Listen binds a TCP address. Try carries the bind failure rather than a
+// ListenTCP binds a TCP address for a non-HTTP protocol.
+//
+// Named ListenTCP rather than Listen because gala-server also has
+// Server.Listen() for HTTP. The compiler can tell them apart; a reader
+// scanning a dot-imported file should not have to. Try carries the bind failure rather than a
 // (Listener, error) pair the caller can forget to check.
-func Listen(addr string) Try[Listener] =
+func ListenTCP(addr string) Try[Listener] =
     Try(() => net.Listen("tcp", addr)).Map((ln) => Listener(ln))
 
 // Accept blocks for the next connection. A Failure means the listener is done —

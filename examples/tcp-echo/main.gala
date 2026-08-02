@@ -1,0 +1,161 @@
+package main
+
+import (
+    . "github.com/martianoff/gala-server"
+    gs "martianoff/gala/strings"
+    "strconv"
+)
+
+// =============================================================================
+// GALA Server — TCP (non-HTTP protocol) demo
+// =============================================================================
+//
+// Run:   bazel run //examples/tcp-echo
+// Try:   nc localhost 7070      (or telnet localhost 7070)
+//
+// gala-server's `Server` type speaks HTTP: routes, filters, sessions, SSE.
+// Plenty of protocols are not HTTP — Redis's RESP, memcached, SMTP,
+// line-oriented control ports — and those need a byte stream, not a router.
+//
+// `Listen` / `Listener` / `Conn` are that second entry point. They are NOT
+// plumbed into `Server`, and deliberately so: an HTTP server owns routing and
+// middleware, concepts a RESP server has no use for. See docs/tcp.md.
+//
+// The two coexist happily in one binary — see the note at the bottom.
+//
+// This example implements a tiny line protocol:
+//
+//   ECHO <text>   -> <text>
+//   LEN <n>       -> reads exactly n more bytes, replies with what it read
+//   TIME          -> a counter, to show per-connection state
+//   QUIT          -> closes the connection
+//   anything else -> ERR unknown command
+
+val maxLine = 8 * 1024
+
+// handle runs one connection to completion.
+//
+// It is a top-level function taking the Conn, not a closure over enclosing
+// state. That shape keeps every connection independently readable, which
+// matters because Serve runs each one concurrently.
+func handle(c Conn) {
+    Println(s"connect ${c.RemoteAddr()}")
+    var running = true
+    var count = 0
+
+    for running {
+        c.ReadLine(maxLine) match {
+            // None means the peer closed, or the line exceeded maxLine.
+            case None() => {
+                running = false
+            }
+            case Some(line) => {
+                count = count + 1
+                running = respond(c, line, count)
+            }
+        }
+
+        // Flush only when nothing further is already buffered. A client that
+        // pipelines several commands in one write then gets one syscall back
+        // instead of one per reply.
+        if !running || c.Buffered() == 0 {
+            c.Flush()
+        }
+    }
+
+    Println(s"disconnect ${c.RemoteAddr()} after $count command(s)")
+    c.Close()
+}
+
+// respond writes the reply for one line and reports whether to keep going.
+func respond(c Conn, line string, count int) bool {
+    if line == "QUIT" {
+        c.Write("BYE\r\n")
+        return false
+    }
+    if line == "TIME" {
+        c.Write(s"COMMANDS ${strconv.Itoa(count)}\r\n")
+        return true
+    }
+    if gs.HasPrefix(line, "ECHO ") {
+        c.Write(gs.S(line).Drop(5).ToString() + "\r\n")
+        return true
+    }
+    if gs.HasPrefix(line, "LEN ") {
+        val n, err = strconv.Atoi(gs.S(line).Drop(4).ToString())
+        if err != nil || n < 0 {
+            c.Write("ERR bad length\r\n")
+            return true
+        }
+        // Length-driven read: the payload may contain CRLF or NUL bytes, so it
+        // cannot be read to a delimiter. The second argument is how many
+        // trailing bytes to discard — 2 for the CRLF this protocol sends after
+        // the payload.
+        c.ReadExactly(n, 2) match {
+            case Some(payload) => {
+                c.Write(s"GOT ${strconv.Itoa(payload.ByteSize())} $payload\r\n")
+            }
+            case None() => {
+                c.Write("ERR short read\r\n")
+            }
+        }
+        return true
+    }
+    c.Write("ERR unknown command\r\n")
+    return true
+}
+
+
+func main() {
+    ListenTCP(":7070") match {
+        case Success(ln) => {
+            Println(s"tcp-echo listening on ${ln.Addr()}")
+            // Serve accepts until the listener fails, running `handle` on its
+            // own goroutine per connection.
+            ln.Serve(handle)
+        }
+        case Failure(e) => {
+            Println(s"listen failed: ${e.Error()}")
+        }
+    }
+}
+
+// =============================================================================
+// Running an HTTP server AND a TCP listener in one binary
+// =============================================================================
+//
+// They are independent, so this is just two ports:
+//
+//   func main() {
+//       // Admin/metrics over HTTP
+//       go_interop.Spawn(() => NewServer().
+//           WithPort(8080).
+//           WithHealthCheck("/health").
+//           WithMetricsEndpoint("/metrics", NewMetrics()).
+//           Listen())
+//
+//       // The protocol itself over TCP
+//       ListenTCP(":7070") match {
+//           case Success(ln) => ln.Serve(handle)
+//           case Failure(e)  => Println(s"listen failed: ${e.Error()}")
+//       }
+//   }
+//
+// That is the shape a real protocol server wants: the protocol on its own
+// port, and HTTP for the things HTTP is good at — health checks, Prometheus
+// scraping, an admin API.
+//
+// =============================================================================
+// Try it
+// =============================================================================
+//
+//   $ nc localhost 7070
+//   ECHO hello
+//   hello
+//   TIME
+//   COMMANDS 2
+//   LEN 5
+//   abcde
+//   GOT 5 abcde
+//   QUIT
+//   BYE
