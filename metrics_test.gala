@@ -118,7 +118,7 @@ func TestMetricsHandlerShowsRouteBreakdown(t T) T {
 
 func TestWithMetricsEndpointAddsRoute(t T) T {
     val m = NewMetrics()
-    val s = NewServer().
+    val s = NewHTTP().
         WithFilter(MetricsFilter(m)).
         WithMetricsEndpoint("/metrics", m).
         GET("/hello", (req) => Ok("hello"))

@@ -316,16 +316,16 @@ func RunDashboard(b EventBus[Event]) DashboardModel {
 }
 
 // RunWithDashboard is the high-level entry point: wraps the server with
-// TUIFilter, starts Listen() on a background goroutine, and runs the dashboard
+// TUIFilter, serves it on a background goroutine, and runs the dashboard
 // in the foreground. Returns when the user quits the TUI; the HTTP-server
 // goroutine then dies on process exit.
-func RunWithDashboard(s server.Server) {
+func RunWithDashboard(s server.Server, h server.HTTP) {
     val b = NewEventBus[Event]()
-    val configured = s.WithFilter(TUIFilter(b))
+    val configured = h.WithFilter(TUIFilter(b))
     // Run the HTTP server on a background goroutine. Server is a goroutine-safe
     // handle, so this uses the sanctioned go_interop.Spawn escape hatch rather
     // than a Future (whose Sendable boundary would reject capturing the Server).
     // Fire-and-forget: the dashboard runs in the foreground below.
-    go_interop.Spawn(() => { configured.Listen() })
+    go_interop.Spawn(() => { s.ServeHTTP(configured) })
     RunDashboard(b)
 }

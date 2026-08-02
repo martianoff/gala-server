@@ -1,0 +1,250 @@
+package server
+
+import (
+    . "martianoff/gala/collection_immutable"
+    "github.com/martianoff/gala-server/httpcore"
+    "strings"
+)
+
+// HTTP is an immutable HTTP protocol configuration: routes, filters, static
+// mounts, and the handlers that shape responses.
+//
+// It carries no port, name, or lifecycle settings — those live on Server, which
+// is protocol-agnostic. You describe the protocol here and hand it to a Server
+// to run:
+//
+//   NewServer().
+//       WithName("my-api").
+//       WithPort(8080).
+//       ServeHTTP(NewHTTP().
+//           WithBasePath("/api").
+//           GET("/", handler).
+//           WithFilter(Logger()).
+//           WithHealthCheck("/health"))
+//
+// The split exists because gala-server also serves protocols that are not HTTP
+// (see ListenTCP and Server.ServeTCP). Routing and middleware are HTTP concepts;
+// a port and a shutdown timeout are not.
+type HTTP struct {
+    root            Group
+    BasePath        string
+    ErrorHandler    func(error) Response
+    NotFoundHandler func(Request) Response
+    Statics         Array[Tuple[string, string]]
+    renderer        Option[Renderer]
+    validator       Option[Validator]
+    errorMapper     Option[ErrorMapper]
+}
+
+// NewHTTP creates an empty HTTP configuration.
+func NewHTTP() HTTP = HTTP(
+    root = NewGroup(),
+    BasePath = "",
+    ErrorHandler = defaultErrorHandler,
+    NotFoundHandler = defaultNotFoundHandler,
+    Statics = EmptyArray[Tuple[string, string]](),
+    renderer = None[Renderer](),
+    validator = None[Validator](),
+    errorMapper = None[ErrorMapper](),
+)
+
+func defaultErrorHandler(err error) Response =
+    InternalError(s"Internal Server Error: $err")
+
+func defaultNotFoundHandler(req Request) Response =
+    NotFound(s"Not Found: ${req.Method().Name()} ${req.Path()}")
+
+// --- Configuration ---
+
+func (h HTTP) copy(
+    root Group = h.root,
+    basePath string = h.BasePath,
+    errHandler func(error) Response = h.ErrorHandler,
+    notFound func(Request) Response = h.NotFoundHandler,
+    statics Array[Tuple[string, string]] = h.Statics,
+    rndr Option[Renderer] = h.renderer,
+    vldr Option[Validator] = h.validator,
+    errMapper Option[ErrorMapper] = h.errorMapper,
+) HTTP = HTTP(root, basePath, errHandler, notFound, statics, rndr, vldr, errMapper)
+
+// WithBasePath sets the base path prefix for all routes.
+// Example: WithBasePath("/api/v1") causes GET("/users", h) to match "/api/v1/users".
+func (h HTTP) WithBasePath(prefix string) HTTP = h.copy(basePath = prefix)
+
+// WithErrorHandler sets a custom error handler for unhandled errors.
+func (h HTTP) WithErrorHandler(handler func(error) Response) HTTP =
+    h.copy(errHandler = handler)
+
+// WithNotFound sets a custom handler for 404 Not Found responses.
+func (h HTTP) WithNotFound(handler func(Request) Response) HTTP =
+    h.copy(notFound = handler)
+
+// WithRenderer sets the template renderer.
+func (h HTTP) WithRenderer(r Renderer) HTTP = h.copy(rndr = Some(r))
+
+// WithValidator sets the struct validator.
+func (h HTTP) WithValidator(v Validator) HTTP = h.copy(vldr = Some(v))
+
+// WithErrorMapper registers an error mapper that converts specific error types
+// to HTTP responses. The mapper returns Some(response) if it can handle the
+// error, None otherwise.
+func (h HTTP) WithErrorMapper(mapper ErrorMapper) HTTP =
+    h.copy(errMapper = Some(mapper))
+
+// WithMetricsEndpoint registers a Prometheus-compatible metrics endpoint.
+// Requires a Metrics collector — also add MetricsFilter() as a global filter.
+func (h HTTP) WithMetricsEndpoint(path string, m Metrics) HTTP =
+    h.GET(path, metricsHandler(m))
+
+// Render renders a template using the registered Renderer.
+func (h HTTP) Render(name string, data any) Response =
+    h.renderer match {
+        case Some(r) => Html(r.Render(name, data))
+        case None() => InternalError("renderer not registered")
+    }
+
+// --- Health Check & Readiness ---
+
+// WithHealthCheck registers a health endpoint returning 200 OK.
+func (h HTTP) WithHealthCheck(path string) HTTP =
+    h.GET(path, (req Request) => Ok("OK"))
+
+// WithReadiness registers a readiness endpoint with a custom check.
+// Returns 200 OK if the check passes, 503 otherwise.
+func (h HTTP) WithReadiness(path string, check func() bool) HTTP =
+    h.GET(path, (req Request) => if (check()) Ok("READY") else ServiceUnavailable("NOT READY"))
+
+// --- Static Files ---
+
+// Static registers a static file directory under the given URL prefix.
+func (h HTTP) Static(prefix string, dir string) HTTP =
+    h.copy(statics = h.Statics.Append((prefix, dir)))
+
+// --- Routing (delegates to root group) ---
+
+func (h HTTP) GET(pattern string, handler func(Request) Response, filters ...Filter) HTTP =
+    h.copy(root = h.root.GET(pattern, handler, filters...))
+
+func (h HTTP) POST(pattern string, handler func(Request) Response, filters ...Filter) HTTP =
+    h.copy(root = h.root.POST(pattern, handler, filters...))
+
+func (h HTTP) PUT(pattern string, handler func(Request) Response, filters ...Filter) HTTP =
+    h.copy(root = h.root.PUT(pattern, handler, filters...))
+
+func (h HTTP) DELETE(pattern string, handler func(Request) Response, filters ...Filter) HTTP =
+    h.copy(root = h.root.DELETE(pattern, handler, filters...))
+
+func (h HTTP) PATCH(pattern string, handler func(Request) Response, filters ...Filter) HTTP =
+    h.copy(root = h.root.PATCH(pattern, handler, filters...))
+
+func (h HTTP) HEAD(pattern string, handler func(Request) Response, filters ...Filter) HTTP =
+    h.copy(root = h.root.HEAD(pattern, handler, filters...))
+
+func (h HTTP) OPTIONS(pattern string, handler func(Request) Response, filters ...Filter) HTTP =
+    h.copy(root = h.root.OPTIONS(pattern, handler, filters...))
+
+func (h HTTP) Handle(method Method, pattern string, handler Handler, filters ...Filter) HTTP =
+    h.copy(root = h.root.Handle(method, pattern, handler, filters...))
+
+// Any registers a handler for ALL HTTP methods on the given pattern.
+func (h HTTP) Any(pattern string, handler func(Request) Response, filters ...Filter) HTTP =
+    ArrayOf(GET(), POST(), PUT(), DELETE(), PATCH(), HEAD(), OPTIONS()).FoldLeft(h, (acc, m) =>
+        acc.Handle(m, pattern, liftHandler(handler), filters...))
+
+// --- Filters ---
+
+// WithFilter returns a new HTTP config with an additional global filter.
+func (h HTTP) WithFilter(f Filter) HTTP =
+    h.copy(root = h.root.WithFilter(f))
+
+// --- Composition ---
+
+// Group mounts all routes from a Group under the given prefix.
+func (h HTTP) Group(prefix string, sub Group) HTTP =
+    h.copy(root = h.root.Group(prefix, sub))
+
+// WithRoutes copies all routes from a Group (no prefix).
+func (h HTTP) WithRoutes(sub Group) HTTP =
+    h.copy(root = h.root.WithRoutes(sub))
+
+// --- Route Naming ---
+
+// Named sets a name on the last registered route.
+func (h HTTP) Named(name string) HTTP {
+    val routes = h.root.Routes
+    if routes.IsEmpty() {
+        return h
+    }
+    val last = routes.Last()
+    val named = Route(last.Method, last.Pattern, last.Handler, name)
+    val updated = routes.Init().Append(named)
+    val newRoot = Group(Routes = updated, Filters = h.root.Filters)
+    return h.copy(root = newRoot)
+}
+
+// URL generates a URL for a named route by substituting path parameters.
+// Parameters are key-value pairs: URL("user", "id", "42").
+func (h HTTP) URL(name string, params ...string) Option[string] =
+    h.root.Routes.Find((r) => r.Name == name).Map((r) =>
+        ArrayOf(params...).Grouped(2).FoldLeft(r.Pattern, (path, pair) =>
+            if (pair.Size() == 2) strings.Replace(path, s"{${pair.Get(0)}}", pair.Get(1), 1) else path))
+
+// --- Queries ---
+
+func (h HTTP) RouteCount() int = h.root.RouteCount()
+func (h HTTP) FilterCount() int = h.root.FilterCount()
+
+// Routes returns a description of all registered routes (for debugging).
+func (h HTTP) Routes() Array[string] =
+    h.root.Routes.Map((route) => s"${route.Method.Name()} ${route.Pattern}")
+
+// --- Internal ---
+
+// bannerLines are the HTTP-specific lines a Server prints at startup. The
+// Server owns the banner's shape (name, address, shutdown); the protocol
+// contributes what only it knows.
+func (h HTTP) bannerLines(debug bool) Array[string] {
+    val base = if (h.BasePath != "") ArrayOf(s"Base path: ${h.BasePath}") else EmptyArray[string]()
+    val summary = base.Append(
+        s"Routes: ${h.RouteCount()}, Filters: ${h.FilterCount()}, Static: ${h.Statics.Size()}")
+    if !debug {
+        return summary
+    }
+    val routeLines = h.root.Routes.Map((route) => s"  ${route.Method.Name()} ${route.Pattern}")
+    val staticLines = h.Statics.Map((pair) => s"  STATIC ${pair.V1} -> ${pair.V2}")
+    return summary.Append("Routes:").AppendAll(routeLines).AppendAll(staticLines)
+}
+
+func (h HTTP) buildServerBuilder() *httpcore.ServerBuilder {
+    val sb = httpcore.NewServerBuilder()
+    val errHandler = h.ErrorHandler
+    val errMapper = h.errorMapper
+
+    // Register static routes
+    h.Statics.ForEach((pair) => sb.AddStatic(pair.V1, pair.V2))
+
+    // Register API routes, prepending BasePath to patterns
+    h.root.Routes.ForEach((route) => {
+        val handler = applyFilters(route.Handler, h.root.Filters)
+        val pattern = if (h.BasePath != "") h.BasePath + route.Pattern else route.Pattern
+        sb.AddRoute(route.Method.Name(), pattern, makeBridgeHandler(handler, errHandler, errMapper))
+    })
+
+    return sb
+}
+
+func makeBridgeHandler(handler Handler, errHandler func(error) Response, errMapper Option[ErrorMapper]) httpcore.BridgeHandler =
+    (br httpcore.BridgeRequest) => {
+        val req = Request(bridge = br)
+        return handler(req).Await() match {
+            case Success(resp) => resp.ToBridge()
+            case Failure(err) => {
+                val mapped = errMapper.FlatMap((mapper) => mapper(err))
+                val resp = mapped match {
+                    case Some(r) => r
+                    case None() => errHandler(err)
+                }
+                return resp.ToBridge()
+            }
+        }
+    }

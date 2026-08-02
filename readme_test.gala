@@ -19,7 +19,7 @@ val readmePortCounter = httpcore.NewAtomicCounter()
 
 // --- Helper: start a server on a unique port ---
 
-func startOnPort(s Server) string {
+func startOnPort(s HTTP) string {
     val sb = httpcore.NewServerBuilder()
     s.root.Routes.ForEach((route) => {
         val handler = applyFilters(route.Handler, s.root.Filters)
@@ -35,9 +35,8 @@ func startOnPort(s Server) string {
 
 // --- Shared README server builder ---
 
-func readmeServer(stats Metrics, sessions Sessions) Server =
-    NewServer().
-        WithName("README Test").
+func readmeServer(stats Metrics, sessions Sessions) HTTP =
+    NewHTTP().
         WithMetricsEndpoint("/metrics", stats).
         GET("/", (req) => Ok("Hello, GALA!")).
         GET("/users/{id}", (req) => {
@@ -216,7 +215,7 @@ func TestReadmeCorsHeaders(t T) T {
 
 func TestReadmeRateLimiterRejectsExcess(t T) T {
     // Create a server with a very low rate limit to test rejection
-    val s = NewServer().
+    val s = NewHTTP().
         GET("/limited", (req) => Ok("ok")).
         WithFilter(RateLimitSlidingWindow(3, 1 * time.Minute))
 
@@ -237,7 +236,7 @@ func TestReadmeRateLimiterRejectsExcess(t T) T {
 
 func TestReadmeRateLimiterPerIP(t T) T {
     // Test per-IP variant
-    val s = NewServer().
+    val s = NewHTTP().
         GET("/limited", (req) => Ok("ok")).
         WithFilter(RateLimitSlidingWindowPerIP(2, 1 * time.Minute))
 

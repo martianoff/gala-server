@@ -40,17 +40,21 @@ func slowHandler(req Request) Response {
 func errorHandler(req Request) Response = InternalError("simulated 500 for the dashboard demo\n")
 
 func main() {
-    val server = NewServer().
-        WithName("gala-server-tui-demo").
-        WithPort(8080).
+    // The protocol: routes and filters.
+    val app = NewHTTP().
         GET("/", homeHandler).
         GET("/hello/{name}", helloHandler).
         GET("/slow", slowHandler).
         GET("/error", errorHandler).
         WithFilter(Recovery())
 
-    // Hand the server to the TUI runner. It wraps the server with a request-
-    // capturing filter, starts Listen() on a background goroutine, and runs
-    // the live dashboard on the main goroutine. Returns when the user quits.
-    tui.RunWithDashboard(server)
+    // The host: identity, port, lifecycle.
+    val server = NewServer().
+        WithName("gala-server-tui-demo").
+        WithPort(8080)
+
+    // Hand both to the TUI runner. It wraps the HTTP config with a request-
+    // capturing filter, serves it on a background goroutine, and runs the live
+    // dashboard on the main goroutine. Returns when the user quits.
+    tui.RunWithDashboard(server, app)
 }

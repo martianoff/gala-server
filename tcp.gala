@@ -3,8 +3,9 @@ package server
 import "bufio"
 import "bytes"
 import "io"
-import ci "martianoff/gala/collection_immutable"
+import . "martianoff/gala/collection_immutable"
 import "martianoff/gala/go_interop"
+import "github.com/martianoff/gala-server/httpcore"
 import "net"
 import gs "martianoff/gala/strings"
 
@@ -76,6 +77,40 @@ func (l Listener) Serve(handler func(Conn)) {
     }
 }
 
+// --- Server integration ---------------------------------------------------
+
+// ServeTCP runs a non-HTTP protocol on the configured port, reusing the
+// Server's name, port, banner and warmup, and honouring ShutdownTimeout.
+//
+// This is the entry point to reach for. The free ListenTCP below is the
+// primitive underneath it — useful for tests that need an OS-assigned port, or
+// for driving the accept loop yourself — but it does not participate in the
+// Server's lifecycle, so it has no graceful shutdown.
+//
+// The Server's HTTP-only configuration (routes, filters, sessions, base path,
+// error and not-found handlers) is simply unused here, the same way an HTTP
+// server with no routes registered is still a valid server.
+//
+//     NewServer().
+//         WithName("gala-kv").
+//         WithPort(6379).
+//         WithShutdownTimeout(15 * time.Second).
+//         ServeTCP(handle)
+//
+// On SIGINT/SIGTERM it stops accepting, lets in-flight connections finish, and
+// force-closes whatever remains once ShutdownTimeout expires.
+func (s Server) ServeTCP(handler func(Conn)) Try[bool] = s.ServeTCPOn(s":${s.Port}", handler)
+
+// ServeTCPOn is ServeTCP with an explicit address, for binding a specific
+// interface or an OS-assigned port.
+func (s Server) ServeTCPOn(addr string, handler func(Conn)) Try[bool] {
+    return Try(() => httpcore.NewTCPServer(addr)).FlatMap((srv) => {
+        s.runWarmup()
+        s.printBanner(srv.Addr(), "TCP", true, EmptyArray[string]())
+        return Try(() => srv.ServeGraceful((c) => handler(newConn(c)), s.ShutdownTimeout)).Map((_) => true)
+    })
+}
+
 // --- Conn -------------------------------------------------------------------
 
 // Conn is one accepted connection with buffered reading and writing.
@@ -142,7 +177,7 @@ func (c Conn) Write(s string) {
 
 // WriteAll appends several strings in order — the common shape when a reply is
 // assembled from parts and there is no reason to concatenate them first.
-func (c Conn) WriteAll(parts ci.Array[string]) {
+func (c Conn) WriteAll(parts Array[string]) {
     parts.ForEach((p) => c.Write(p))
 }
 
