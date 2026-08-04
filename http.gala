@@ -23,7 +23,7 @@ import (
 //           WithHealthCheck("/health"))
 //
 // The split exists because gala-server also serves protocols that are not HTTP
-// (see ListenTCP and Server.ServeTCP). Routing and middleware are HTTP concepts;
+// (see Server.ServeTCP). Routing and middleware are HTTP concepts;
 // a port and a shutdown timeout are not.
 type HTTP struct {
     root            Group

@@ -214,11 +214,13 @@ server.
 
 ## TCP — protocols that are not HTTP
 
-`Server` speaks HTTP. For protocols that need a raw byte stream — Redis's RESP,
-memcached, SMTP, line-oriented control ports — use `ListenTCP`, a **separate
-entry point in the same package**. It is deliberately not plumbed into `Server`:
-an HTTP server owns routing and middleware, concepts a RESP server has no use
-for.
+A `Server` is protocol-agnostic — it owns identity, port and lifecycle. Hand it
+an `HTTP` config and it speaks HTTP; call `ServeTCP` and it speaks whatever you
+write. Redis's RESP, memcached, SMTP and line-oriented control ports all need a
+byte stream rather than a router.
+
+The protocol is the only thing that changes. Port, name, banner, warmup and
+graceful shutdown are configured the same way either way.
 
 ```gala
 import . "github.com/martianoff/gala-server"
@@ -248,10 +250,11 @@ func handle(c Conn) {
 }
 
 func main() {
-    ListenTCP(":7070") match {
-        case Success(ln) => ln.Serve(handle)
-        case Failure(e)  => Println(s"listen failed: ${e.Error()}")
-    }
+    NewServer().
+        WithName("echo").
+        WithPort(7070).
+        WithShutdownTimeout(10 * time.Second).
+        ServeTCP(handle)
 }
 ```
 
@@ -260,8 +263,11 @@ pairs — just `string`, `int`, `Option` and `Try`. `ReadExactly(n, skip)` reads
 length-prefixed binary payload safely (bounded, so a lying length prefix cannot
 exhaust memory, and delimiter-free, so a payload containing `\r\n` survives).
 
-HTTP and TCP coexist in one binary — run the `Server` on one port for
-health/metrics and `ListenTCP` on another for the protocol itself.
+On SIGINT/SIGTERM it stops accepting, lets in-flight connections finish, and
+force-closes whatever remains once `ShutdownTimeout` expires.
+
+HTTP and TCP coexist in one binary as two ports — `ServeHTTP` for health and
+metrics, `ServeTCP` for the protocol itself.
 
 See **[docs/tcp.md](docs/tcp.md)** for the full API, the concurrency story, and
 why payloads are `string` rather than `[]byte`. A runnable line protocol lives

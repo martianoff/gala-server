@@ -4,6 +4,7 @@ import (
     . "github.com/martianoff/gala-server"
     gs "martianoff/gala/strings"
     "strconv"
+    "time"
 )
 
 // =============================================================================
@@ -13,13 +14,10 @@ import (
 // Run:   bazel run //examples/tcp-echo
 // Try:   nc localhost 7070      (or telnet localhost 7070)
 //
-// gala-server's `Server` type speaks HTTP: routes, filters, sessions, SSE.
-// Plenty of protocols are not HTTP — Redis's RESP, memcached, SMTP,
-// line-oriented control ports — and those need a byte stream, not a router.
-//
-// `Listen` / `Listener` / `Conn` are that second entry point. They are NOT
-// plumbed into `Server`, and deliberately so: an HTTP server owns routing and
-// middleware, concepts a RESP server has no use for. See docs/tcp.md.
+// A `Server` is protocol-agnostic: it owns identity, port, banner, warmup and
+// graceful shutdown. `ServeHTTP` makes it speak HTTP; `ServeTCP` makes it speak
+// whatever you write. Redis's RESP, memcached, SMTP and line-oriented control
+// ports all need a byte stream rather than a router. See docs/tcp.md.
 //
 // The two coexist happily in one binary — see the note at the bottom.
 //
@@ -105,19 +103,18 @@ func respond(c Conn, line string, count int) bool {
     return true
 }
 
-
 func main() {
-    ListenTCP(":7070") match {
-        case Success(ln) => {
-            Println(s"tcp-echo listening on ${ln.Addr()}")
-            // Serve accepts until the listener fails, running `handle` on its
-            // own goroutine per connection.
-            ln.Serve(handle)
+    // The Server owns identity, port and lifecycle; ServeTCP hands it the
+    // protocol. On Ctrl+C it stops accepting, lets in-flight connections
+    // finish, and force-closes whatever is left after ShutdownTimeout.
+    NewServer().
+        WithName("tcp-echo").
+        WithPort(7070).
+        WithShutdownTimeout(10 * time.Second).
+        ServeTCP(handle) match {
+            case Success(_) => {}
+            case Failure(e) => { Println(s"serve failed: ${e.Error()}") }
         }
-        case Failure(e) => {
-            Println(s"listen failed: ${e.Error()}")
-        }
-    }
 }
 
 // =============================================================================
@@ -127,18 +124,14 @@ func main() {
 // They are independent, so this is just two ports:
 //
 //   func main() {
-//       // Admin/metrics over HTTP
-//       go_interop.Spawn(() => NewServer().
-//           WithPort(8080).
-//           WithHealthCheck("/health").
-//           WithMetricsEndpoint("/metrics", NewMetrics()).
-//           Listen())
+//       // Admin/metrics over HTTP, on its own port
+//       go_interop.Spawn(() =>
+//           NewServer().WithPort(8080).ServeHTTP(NewHTTP().
+//               WithHealthCheck("/health").
+//               WithMetricsEndpoint("/metrics", NewMetrics())))
 //
 //       // The protocol itself over TCP
-//       ListenTCP(":7070") match {
-//           case Success(ln) => ln.Serve(handle)
-//           case Failure(e)  => Println(s"listen failed: ${e.Error()}")
-//       }
+//       NewServer().WithPort(7070).ServeTCP(handle)
 //   }
 //
 // That is the shape a real protocol server wants: the protocol on its own
