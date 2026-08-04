@@ -1,0 +1,195 @@
+package server
+
+import "bufio"
+import "bytes"
+import "io"
+import . "martianoff/gala/collection_immutable"
+import "martianoff/gala/go_interop"
+import "github.com/martianoff/gala-server/httpcore"
+import "net"
+import gs "martianoff/gala/strings"
+
+// TCP — a byte-stream server for protocols that are not HTTP.
+//
+// gala-server's Server type speaks HTTP. Plenty of protocols worth writing in
+// GALA do not: Redis's RESP, memcached, SMTP, line-oriented control ports. Those
+// currently force every author to reach for net, bufio, bytes and io directly,
+// which puts Go on the hot path of the very program they wanted to write in
+// GALA — and makes any performance measurement a measurement of Go.
+//
+// This package concentrates that interop in ONE place so callers need none of
+// it. The rule for the API below: nothing in a signature is a Go type. No
+// []byte, no net.Conn, no (value, error) pairs. Callers see string, int,
+// Option and Try.
+//
+// The []byte exclusion is not stylistic. A byte slice is mutable, aliasable and
+// carries two plausible lengths; a Go string is an immutable, arbitrary byte
+// sequence, which is what a binary-safe protocol payload actually is. Every
+// length below is bytes.
+
+// --- Listener ---------------------------------------------------------------
+
+struct Listener(ln net.Listener)
+
+// ListenTCP binds a TCP address for a non-HTTP protocol.
+//
+// Named ListenTCP rather than Listen because gala-server also has
+// Server.Listen() for HTTP. The compiler can tell them apart; a reader
+// scanning a dot-imported file should not have to. Try carries the bind failure rather than a
+// (Listener, error) pair the caller can forget to check.
+func ListenTCP(addr string) Try[Listener] =
+    Try(() => net.Listen("tcp", addr)).Map((ln) => Listener(ln))
+
+// Accept blocks for the next connection. A Failure means the listener is done —
+// closed, or broken — and the accept loop should stop.
+func (l Listener) Accept() Try[Conn] =
+    Try(() => l.ln.Accept()).Map((c) => newConn(c))
+
+// Addr is the bound address, useful when the port was chosen by the OS (":0").
+func (l Listener) Addr() string = l.ln.Addr().String()
+
+func (l Listener) Close() {
+    l.ln.Close()
+}
+
+// Serve accepts until the listener fails, running handler for each connection
+// on its own goroutine.
+//
+// handler is a top-level function taking the Conn, never a closure reaching
+// into enclosing state — that shape keeps each connection independently
+// readable and is what makes the unchecked concurrency below reviewable.
+//
+// CONCURRENCY NOTE. This uses go_interop.Spawn, which is the UNCHECKED escape
+// hatch: GALA's capture analysis (GALA-E0037) fires at Sendable boundaries such
+// as concurrent.Future, and Spawn is deliberately not one. A Future cannot be
+// used here — a live connection owns a socket and mutable buffers, so it is not
+// Shareable and the check would reject it, correctly. Until GALA has a native
+// spawn primitive with a connection-shaped safety story, this is the honest
+// implementation, and concentrating it here means an application built on this
+// package contains zero Spawn call sites of its own.
+func (l Listener) Serve(handler func(Conn)) {
+    var running = true
+    for running {
+        l.Accept() match {
+            case Success(c) => { go_interop.Spawn(() => handler(c)) }
+            case Failure(_) => { running = false }
+        }
+    }
+}
+
+// --- Server integration ---------------------------------------------------
+
+// ServeTCP runs a non-HTTP protocol on the configured port, reusing the
+// Server's name, port, banner and warmup, and honouring ShutdownTimeout.
+//
+// This is the entry point to reach for. The free ListenTCP below is the
+// primitive underneath it — useful for tests that need an OS-assigned port, or
+// for driving the accept loop yourself — but it does not participate in the
+// Server's lifecycle, so it has no graceful shutdown.
+//
+// The Server's HTTP-only configuration (routes, filters, sessions, base path,
+// error and not-found handlers) is simply unused here, the same way an HTTP
+// server with no routes registered is still a valid server.
+//
+//     NewServer().
+//         WithName("gala-kv").
+//         WithPort(6379).
+//         WithShutdownTimeout(15 * time.Second).
+//         ServeTCP(handle)
+//
+// On SIGINT/SIGTERM it stops accepting, lets in-flight connections finish, and
+// force-closes whatever remains once ShutdownTimeout expires.
+func (s Server) ServeTCP(handler func(Conn)) Try[bool] = s.ServeTCPOn(s":${s.Port}", handler)
+
+// ServeTCPOn is ServeTCP with an explicit address, for binding a specific
+// interface or an OS-assigned port.
+func (s Server) ServeTCPOn(addr string, handler func(Conn)) Try[bool] {
+    return Try(() => httpcore.NewTCPServer(addr)).FlatMap((srv) => {
+        s.runWarmup()
+        s.printBanner(srv.Addr(), "TCP", true, EmptyArray[string]())
+        return Try(() => srv.ServeGraceful((c) => handler(newConn(c)), s.ShutdownTimeout)).Map((_) => true)
+    })
+}
+
+// --- Conn -------------------------------------------------------------------
+
+// Conn is one accepted connection with buffered reading and writing.
+//
+// scratch is per-connection and reused by ReadExactly, so the steady-state cost
+// of reading a length-prefixed payload is one allocation: the returned string,
+// which is irreducible because the payload IS that string.
+struct Conn(conn net.Conn, r *bufio.Reader, w *bufio.Writer, scratch *bytes.Buffer)
+
+val defaultReadBuf = 16 * 1024
+val defaultWriteBuf = 16 * 1024
+
+func newConn(c net.Conn) Conn = Conn(
+    c,
+    bufio.NewReaderSize(c, defaultReadBuf),
+    bufio.NewWriterSize(c, defaultWriteBuf),
+    bytes.NewBufferString(""),
+)
+
+// ReadLine reads through the next '\n' and returns the line with any trailing
+// "\r\n" or "\n" removed. None means the peer closed or the read failed.
+//
+// maxBytes caps the line so a peer cannot make the server buffer without bound;
+// a longer line yields None rather than a truncated string, because silently
+// truncating a protocol line desynchronises the stream.
+func (c Conn) ReadLine(maxBytes int) Option[string] {
+    val line, err = c.r.ReadString('\n')
+    if err != nil || line.ByteSize() > maxBytes {
+        return None[string]()
+    }
+    return Some(gs.TrimSuffix(gs.TrimSuffix(line, "\n"), "\r"))
+}
+
+// ReadExactly reads exactly n bytes and returns them as a string, discarding
+// the following `skip` bytes (a protocol's trailing delimiter, e.g. 2 for CRLF).
+//
+// The read is LENGTH-driven, not delimiter-driven. A binary payload may contain
+// the delimiter, so reading to a delimiter would truncate it. The natural repair
+// — read to the delimiter in a loop until n bytes accumulate — is a
+// denial-of-service vector: a peer that declares a tiny length then streams
+// gigabytes without a delimiter makes the first read allocate all of it before
+// any check runs. io.CopyN is bounded by construction, which is why it is used
+// here rather than for style.
+func (c Conn) ReadExactly(n int, skip int) Option[string] {
+    c.scratch.Reset()
+    val got, err = io.CopyN(c.scratch, c.r, int64(n+skip))
+    if err != nil || got != int64(n+skip) {
+        return None[string]()
+    }
+    c.scratch.Truncate(n)
+    return Some(c.scratch.String())
+}
+
+// Buffered is how many bytes are already read and waiting. A server can use it
+// to decide whether to flush now or keep batching: flushing only when nothing
+// further is pending is what makes request pipelining fast, turning one syscall
+// into one instead of one per reply.
+func (c Conn) Buffered() int = c.r.Buffered()
+
+// Write appends to the outgoing buffer. Nothing reaches the socket until Flush.
+func (c Conn) Write(s string) {
+    c.w.WriteString(s)
+}
+
+// WriteAll appends several strings in order — the common shape when a reply is
+// assembled from parts and there is no reason to concatenate them first.
+func (c Conn) WriteAll(parts Array[string]) {
+    parts.ForEach((p) => c.Write(p))
+}
+
+func (c Conn) Flush() {
+    c.w.Flush()
+}
+
+// Close flushes anything pending and closes the socket.
+func (c Conn) Close() {
+    c.w.Flush()
+    c.conn.Close()
+}
+
+// RemoteAddr identifies the peer, for logging and for per-client limits.
+func (c Conn) RemoteAddr() string = c.conn.RemoteAddr().String()

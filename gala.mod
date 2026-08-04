@@ -1,5 +1,5 @@
 module github.com/martianoff/gala-server
 
-gala 0.72.2
+gala 0.73.1
 
 require github.com/martianoff/gala-tui v0.11.0

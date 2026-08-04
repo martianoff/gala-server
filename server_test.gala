@@ -23,11 +23,12 @@ func testReq(method string, path string) *httpcore.TestRequestBuilder =
 // ============================================================================
 
 func TestNewServer(t T) T {
+    val h = NewHTTP()
     val s = NewServer()
-    val t1 = Eq(t, s.RouteCount(), 0)
+    val t1 = Eq(t, h.RouteCount(), 0)
     val t2 = Eq(t1, s.Port, 8080)
     val t3 = Eq(t2, s.Name, "GALA Server")
-    val t4 = Eq(t3, s.FilterCount(), 0)
+    val t4 = Eq(t3, h.FilterCount(), 0)
     return IsFalse(t4, s.Debug)
 }
 
@@ -51,29 +52,34 @@ func TestWithBanner(t T) T {
     return IsFalse(t, s.Banner)
 }
 
+// Server and HTTP are separate builders, so each is checked on its own: the
+// point of the split is that lifecycle config and protocol config no longer
+// share a type.
 func TestConfigPreservedAcrossBuilderCalls(t T) T {
     val s = NewServer().
         WithPort(3000).
         WithName("Test API").
         WithDebug(true).
-        WithBanner(false).
-        GET("/hello", (req) => Ok("hello")).
-        WithFilter(Logger())
+        WithBanner(false)
     val t1 = Eq(t, s.Port, 3000)
     val t2 = Eq(t1, s.Name, "Test API")
     val t3 = IsTrue(t2, s.Debug)
     val t4 = IsFalse(t3, s.Banner)
-    val t5 = Eq(t4, s.RouteCount(), 1)
-    return Eq(t5, s.FilterCount(), 1)
+
+    val h = NewHTTP().
+        GET("/hello", (req) => Ok("hello")).
+        WithFilter(Logger())
+    val t5 = Eq(t4, h.RouteCount(), 1)
+    return Eq(t5, h.FilterCount(), 1)
 }
 
 func TestServerGET(t T) T {
-    val s = NewServer().GET("/hello", (req) => Ok("hello"))
+    val s = NewHTTP().GET("/hello", (req) => Ok("hello"))
     return Eq(t, s.RouteCount(), 1)
 }
 
 func TestServerMultipleRoutes(t T) T {
-    val s = NewServer().
+    val s = NewHTTP().
         GET("/", (req) => Ok("home")).
         POST("/users", (req) => Created("ok")).
         DELETE("/users/{id}", (req) => NoContent())
@@ -81,7 +87,7 @@ func TestServerMultipleRoutes(t T) T {
 }
 
 func TestServerAllMethods(t T) T {
-    val s = NewServer().
+    val s = NewHTTP().
         GET("/get", (req) => Ok("get")).
         POST("/post", (req) => Ok("post")).
         PUT("/put", (req) => Ok("put")).
@@ -93,14 +99,14 @@ func TestServerAllMethods(t T) T {
 }
 
 func TestServerImmutability(t T) T {
-    val s1 = NewServer().GET("/a", (req) => Ok("a"))
+    val s1 = NewHTTP().GET("/a", (req) => Ok("a"))
     val s2 = s1.GET("/b", (req) => Ok("b"))
     val t1 = Eq(t, s1.RouteCount(), 1)
     return Eq(t1, s2.RouteCount(), 2)
 }
 
 func TestServerAnyMethod(t T) T {
-    val s = NewServer().Any("/wildcard", (req) => Ok("any"))
+    val s = NewHTTP().Any("/wildcard", (req) => Ok("any"))
     return Eq(t, s.RouteCount(), 7)
 }
 
@@ -110,17 +116,17 @@ func TestWithShutdownTimeout(t T) T {
 }
 
 func TestWithNotFoundHandler(t T) T {
-    val s = NewServer().WithNotFound((req) => NotFound("custom 404"))
+    val s = NewHTTP().WithNotFound((req) => NotFound("custom 404"))
     return IsTrue(t, s.NotFoundHandler != nil)
 }
 
 func TestWithErrorHandler(t T) T {
-    val s = NewServer().WithErrorHandler((err) => InternalError("custom error"))
+    val s = NewHTTP().WithErrorHandler((err) => InternalError("custom error"))
     return IsTrue(t, s.ErrorHandler != nil)
 }
 
 func TestServerRoutesDebug(t T) T {
-    val s = NewServer().
+    val s = NewHTTP().
         GET("/hello", (req) => Ok("hello")).
         POST("/users", (req) => Created("ok"))
     val routes = s.Routes()
@@ -129,7 +135,7 @@ func TestServerRoutesDebug(t T) T {
 }
 
 func TestStaticRouteRegistration(t T) T {
-    val s = NewServer().
+    val s = NewHTTP().
         Static("/public/", "./static").
         Static("/assets/", "./assets").
         GET("/api/health", (req) => Ok("ok"))
@@ -536,7 +542,7 @@ func TestRequestCtxGetMissing(t T) T {
 // ============================================================================
 
 func TestWithFilter(t T) T {
-    val s = NewServer().
+    val s = NewHTTP().
         GET("/", (req) => Ok("hello")).
         WithFilter(Logger()).
         WithFilter(Recovery())
@@ -545,7 +551,7 @@ func TestWithFilter(t T) T {
 }
 
 func TestFilterImmutability(t T) T {
-    val s1 = NewServer().GET("/a", (req) => Ok("a"))
+    val s1 = NewHTTP().GET("/a", (req) => Ok("a"))
     val s2 = s1.WithFilter(Logger())
     val t1 = Eq(t, s1.FilterCount(), 0)
     return Eq(t1, s2.FilterCount(), 1)
@@ -624,7 +630,7 @@ func TestWithRoutes(t T) T {
     val api = NewGroup().
         GET("/users", (req) => Ok("users")).
         POST("/users", (req) => Created("ok"))
-    val s = NewServer().WithRoutes(api)
+    val s = NewHTTP().WithRoutes(api)
     return Eq(t, s.RouteCount(), 2)
 }
 
@@ -632,13 +638,13 @@ func TestGroup(t T) T {
     val api = NewGroup().
         GET("/users", (req) => Ok("users")).
         POST("/users", (req) => Created("ok"))
-    val s = NewServer().Group("/api/v1", api)
+    val s = NewHTTP().Group("/api/v1", api)
     return Eq(t, s.RouteCount(), 2)
 }
 
 func TestGroupPreservesExistingRoutes(t T) T {
     val api = NewGroup().GET("/items", (req) => Ok("items"))
-    val s = NewServer().
+    val s = NewHTTP().
         GET("/health", (req) => Ok("ok")).
         Group("/api", api)
     return Eq(t, s.RouteCount(), 2)
@@ -647,14 +653,14 @@ func TestGroupPreservesExistingRoutes(t T) T {
 func TestGroupMultipleGroups(t T) T {
     val v1 = NewGroup().GET("/users", (req) => Ok("v1"))
     val v2 = NewGroup().GET("/users", (req) => Ok("v2"))
-    val s = NewServer().
+    val s = NewHTTP().
         Group("/api/v1", v1).
         Group("/api/v2", v2)
     return Eq(t, s.RouteCount(), 2)
 }
 
 func TestRouteFilter(t T) T {
-    val s = NewServer().
+    val s = NewHTTP().
         GET("/public", (req) => Ok("public")).
         GET("/secret", (req) => Ok("secret"), Auth())
     val t1 = Eq(t, s.RouteCount(), 2)
@@ -662,7 +668,7 @@ func TestRouteFilter(t T) T {
 }
 
 func TestRouteMultipleFilters(t T) T {
-    val s = NewServer().
+    val s = NewHTTP().
         GET("/admin", (req) => Ok("admin"), Auth(), Logger())
     return Eq(t, s.RouteCount(), 1)
 }
@@ -671,7 +677,7 @@ func TestGroupFilters(t T) T {
     val api = NewGroup().
         GET("/users", (req) => Ok("users")).
         WithFilter(Auth())
-    val s = NewServer().
+    val s = NewHTTP().
         GET("/health", (req) => Ok("ok")).
         Group("/api", api).
         WithFilter(Logger())
@@ -684,7 +690,7 @@ func TestGroupFiltersDoNotLeakToParent(t T) T {
         GET("/secret", (req) => Ok("secret")).
         WithFilter(Auth()).
         WithFilter(Recovery())
-    val s = NewServer().
+    val s = NewHTTP().
         GET("/public", (req) => Ok("public")).
         Group("/api", api)
     return Eq(t, s.FilterCount(), 0)
@@ -695,7 +701,7 @@ func TestNestedGroups(t T) T {
     val outer = NewGroup().
         GET("/list", (req) => Ok("list")).
         Group("/nested", inner)
-    val s = NewServer().Group("/api", outer)
+    val s = NewHTTP().Group("/api", outer)
     return Eq(t, s.RouteCount(), 2)
 }
 
@@ -831,14 +837,14 @@ func TestStreamResponse(t T) T {
 // ============================================================================
 
 func TestServerNamed(t T) T {
-    val s = NewServer().
+    val s = NewHTTP().
         GET("/users", (req) => Ok("users")).Named("user-list").
         GET("/users/{id}", (req) => Ok("user")).Named("user-detail")
     return Eq(t, s.RouteCount(), 2)
 }
 
 func TestServerURLGeneration(t T) T {
-    val s = NewServer().
+    val s = NewHTTP().
         GET("/users", (req) => Ok("users")).Named("user-list").
         GET("/users/{id}", (req) => Ok("user")).Named("user-detail")
     val t1 = IsSome(t, s.URL("user-list"))
@@ -852,7 +858,7 @@ func TestServerURLGeneration(t T) T {
 // ============================================================================
 
 func TestServerRenderWithoutRenderer(t T) T {
-    val s = NewServer()
+    val s = NewHTTP()
     val resp = s.Render("template", nil)
     return Eq(t, resp.Code(), 500)
 }
@@ -871,12 +877,7 @@ func TestFullFrameworkConfiguration(t T) T {
         GET("/stats", (req) => Ok("stats")).
         WithFilter(AuthBearer((token) => token == "admin"))
 
-    val s = NewServer().
-        WithName("Full API").
-        WithPort(9090).
-        WithShutdownTimeout(15 * time.Second).
-        WithDebug(true).
-        WithBanner(false).
+    val s = NewHTTP().
         WithErrorHandler((err) => JsonResponse(s"{\"error\": \"$err\"}")).
         WithNotFound((req) => NotFound("custom 404")).
         GET("/", (req) => Ok("Hello, GALA!")).
@@ -890,12 +891,8 @@ func TestFullFrameworkConfiguration(t T) T {
         WithFilter(RateLimit(1000.0, 100.0)).
         WithFilter(RequestId())
 
-    val t1 = Eq(t, s.Port, 9090)
-    val t2 = Eq(t1, s.Name, "Full API")
-    val t3 = IsTrue(t2, s.Debug)
-    val t4 = IsFalse(t3, s.Banner)
-    val t5 = Eq(t4, s.RouteCount(), 5)
-    return Eq(t5, s.FilterCount(), 5)
+    val t1 = Eq(t, s.RouteCount(), 5)
+    return Eq(t1, s.FilterCount(), 5)
 }
 
 // ============================================================================
@@ -903,27 +900,25 @@ func TestFullFrameworkConfiguration(t T) T {
 // ============================================================================
 
 func TestWithBasePath(t T) T {
-    val s = NewServer().WithBasePath("/api/v1")
+    val s = NewHTTP().WithBasePath("/api/v1")
     return Eq(t, s.BasePath, "/api/v1")
 }
 
 func TestBasePathDefault(t T) T {
-    val s = NewServer()
+    val s = NewHTTP()
     return Eq(t, s.BasePath, "")
 }
 
 func TestBasePathPreservedAcrossBuilderCalls(t T) T {
-    val s = NewServer().
+    val s = NewHTTP().
         WithBasePath("/api/v1").
-        WithPort(9090).
         GET("/users", (req) => Ok("users"))
     val t1 = Eq(t, s.BasePath, "/api/v1")
-    val t2 = Eq(t1, s.Port, 9090)
-    return Eq(t2, s.RouteCount(), 1)
+    return Eq(t1, s.RouteCount(), 1)
 }
 
 func TestBasePathWithRoutes(t T) T {
-    val s = NewServer().
+    val s = NewHTTP().
         WithBasePath("/api/v1").
         GET("/users", (req) => Ok("users")).
         POST("/items", (req) => Created("ok"))
@@ -947,12 +942,12 @@ func TestListenTLSExists(t T) T {
 // ============================================================================
 
 func TestWithHealthCheck(t T) T {
-    val s = NewServer().WithHealthCheck("/health")
+    val s = NewHTTP().WithHealthCheck("/health")
     return Eq(t, s.RouteCount(), 1)
 }
 
 func TestWithHealthCheckMultiple(t T) T {
-    val s = NewServer().
+    val s = NewHTTP().
         WithHealthCheck("/health").
         GET("/api", (req) => Ok("api"))
     return Eq(t, s.RouteCount(), 2)
@@ -963,12 +958,12 @@ func TestWithHealthCheckMultiple(t T) T {
 // ============================================================================
 
 func TestWithReadiness(t T) T {
-    val s = NewServer().WithReadiness("/ready", () => true)
+    val s = NewHTTP().WithReadiness("/ready", () => true)
     return Eq(t, s.RouteCount(), 1)
 }
 
 func TestWithReadinessMultiple(t T) T {
-    val s = NewServer().
+    val s = NewHTTP().
         WithReadiness("/ready", () => true).
         GET("/api", (req) => Ok("api"))
     return Eq(t, s.RouteCount(), 2)
@@ -995,12 +990,12 @@ func TestWithWarmupDefault(t T) T {
 
 func TestWithErrorMapper(t T) T {
     val mapper = (err error) => Some(BadRequest(s"mapped: $err"))
-    val s = NewServer().WithErrorMapper(mapper)
+    val s = NewHTTP().WithErrorMapper(mapper)
     return IsTrue(t, s.errorMapper.IsDefined())
 }
 
 func TestWithErrorMapperDefault(t T) T {
-    val s = NewServer()
+    val s = NewHTTP()
     return IsTrue(t, s.errorMapper.IsEmpty())
 }
 

@@ -202,7 +202,7 @@ func TestSessionCleanupKeepsFresh(t T) T {
 
 func TestServerWithSessionFilter(t T) T {
     val sessions = NewSessions("secret")
-    val s = NewServer().
+    val s = NewHTTP().
         WithFilter(SessionFilter(sessions)).
         GET("/login", (req) => {
             req.SessionSet("user", "bob")

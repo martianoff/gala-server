@@ -212,6 +212,61 @@ server.
     WithReadiness("/ready", () => dbPool.IsConnected())
 ```
 
+## TCP — protocols that are not HTTP
+
+`Server` speaks HTTP. For protocols that need a raw byte stream — Redis's RESP,
+memcached, SMTP, line-oriented control ports — use `ListenTCP`, a **separate
+entry point in the same package**. It is deliberately not plumbed into `Server`:
+an HTTP server owns routing and middleware, concepts a RESP server has no use
+for.
+
+```gala
+import . "github.com/martianoff/gala-server"
+
+// Handlers are top-level functions taking the Conn, one per connection.
+func handle(c Conn) {
+    var running = true
+    for running {
+        c.ReadLine(8192) match {
+            case None()       => { running = false }          // peer closed
+            case Some(line)   => {
+                if line == "QUIT" {
+                    c.Write("BYE\r\n")
+                    running = false
+                } else {
+                    c.Write(line + "\r\n")
+                }
+            }
+        }
+        // Flush only when nothing further is buffered — this is what makes
+        // pipelined requests one syscall instead of one per reply.
+        if !running || c.Buffered() == 0 {
+            c.Flush()
+        }
+    }
+    c.Close()
+}
+
+func main() {
+    ListenTCP(":7070") match {
+        case Success(ln) => ln.Serve(handle)
+        case Failure(e)  => Println(s"listen failed: ${e.Error()}")
+    }
+}
+```
+
+No Go type appears in the API: no `[]byte`, no `net.Conn`, no `(value, error)`
+pairs — just `string`, `int`, `Option` and `Try`. `ReadExactly(n, skip)` reads a
+length-prefixed binary payload safely (bounded, so a lying length prefix cannot
+exhaust memory, and delimiter-free, so a payload containing `\r\n` survives).
+
+HTTP and TCP coexist in one binary — run the `Server` on one port for
+health/metrics and `ListenTCP` on another for the protocol itself.
+
+See **[docs/tcp.md](docs/tcp.md)** for the full API, the concurrency story, and
+why payloads are `string` rather than `[]byte`. A runnable line protocol lives
+in [`examples/tcp-echo`](examples/tcp-echo).
+
 ## Prerequisites
 
 - [GALA](https://github.com/martianoff/gala) compiler (v0.25.3+)

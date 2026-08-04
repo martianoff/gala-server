@@ -122,17 +122,11 @@ func main() {
 
     // --- Server Assembly ---
 
-    val server = NewServer().
-        WithName("GALA Full Demo").
-        WithPort(8080).
+    val app = NewHTTP().
         WithBasePath("/api").
-        WithShutdownTimeout(15 * time.Second).
-        WithDebug(true).
         // Error handling
         WithErrorHandler((err) => NewHTTPError(StatusInternalError(), s"$err").ToJsonResponse()).
         WithNotFound((req) => NewHTTPError(StatusNotFound(), s"${req.Method().Name()} ${req.Path()} not found").ToJsonResponse()).
-        // Warmup
-        WithWarmup(() => Println("   Warming up...")).
         // Health & readiness
         WithHealthCheck("/health").
         WithReadiness("/ready", () => true).
@@ -169,11 +163,17 @@ func main() {
         WithFilter(ETag())
 
     // --- Startup Info ---
-    Println(s"Home URL: ${server.URL("home").GetOrElse("???")}")
-    Println(s"Routes: ${server.RouteCount()}, Filters: ${server.FilterCount()}")
+    Println(s"Home URL: ${app.URL("home").GetOrElse("???")}")
+    Println(s"Routes: ${app.RouteCount()}, Filters: ${app.FilterCount()}")
 
     // Start with graceful shutdown (Ctrl+C to stop)
-    server.ListenGraceful()
+    NewServer().
+        WithName("GALA Full Demo").
+        WithPort(8080).
+        WithShutdownTimeout(15 * time.Second).
+        WithDebug(true).
+        WithWarmup(() => Println("   Warming up...")).
+        ServeHTTPGraceful(app)
 }
 
 // =============================================================================
