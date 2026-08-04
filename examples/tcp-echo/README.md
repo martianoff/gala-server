@@ -1,6 +1,6 @@
 # tcp-echo
 
-A minimal non-HTTP protocol server built on gala-server's `ListenTCP`.
+A minimal non-HTTP protocol server built on `Server.ServeTCP`.
 
 `Server` speaks HTTP; this is the other entry point, for protocols that need a
 raw byte stream. See [../../docs/tcp.md](../../docs/tcp.md) for the full API and
