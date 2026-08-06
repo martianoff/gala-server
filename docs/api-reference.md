@@ -167,7 +167,7 @@ val mapper ErrorMapper = (err) => {
     return None[Response]()
 }
 
-server.WithErrorMapper(mapper)
+app.WithErrorMapper(mapper)
 ```
 
 ## Request API
@@ -368,14 +368,18 @@ err.ToJsonResponse() // JSON Response: {"error": "...", "code": 404}
 
 ### Builder Methods
 
+Host settings live on `Server`; protocol settings live on `HTTP`.
+
 ```gala
 NewServer().
     WithPort(8080).
     WithName("My API").
-    WithBasePath("/api/v1").
     WithDebug(true).
     WithBanner(false).
-    WithShutdownTimeout(10 * time.Second).
+    WithShutdownTimeout(10 * time.Second)
+
+NewHTTP().
+    WithBasePath("/api/v1").
     WithErrorHandler((err) => InternalError(err.Error())).
     WithNotFound((req) => NotFound("page not found")).
     WithErrorMapper(myMapper).
@@ -389,7 +393,7 @@ NewServer().
 `WithBasePath` sets a prefix for all registered routes:
 
 ```gala
-val server = NewServer().
+val app = NewHTTP().
     WithBasePath("/api/v1").
     GET("/users", listUsers).        // matches /api/v1/users
     GET("/users/{id}", getUser)      // matches /api/v1/users/{id}
@@ -409,7 +413,7 @@ val mapper ErrorMapper = (err) => {
     return None[Response]()
 }
 
-server.WithErrorMapper(mapper)
+app.WithErrorMapper(mapper)
 ```
 
 ### Warmup
@@ -417,7 +421,7 @@ server.WithErrorMapper(mapper)
 `WithWarmup` registers a function that runs before the server starts accepting traffic:
 
 ```gala
-server.WithWarmup(() => {
+app.WithWarmup(() => {
     loadCaches()
     warmConnectionPools()
 })
@@ -427,16 +431,16 @@ server.WithWarmup(() => {
 
 ```gala
 // Simple health check — returns 200 "OK"
-server.WithHealthCheck("/health")
+app.WithHealthCheck("/health")
 
 // Readiness with custom check — returns 200 "READY" or 503 "NOT READY"
-server.WithReadiness("/ready", () => dbPool.IsConnected())
+app.WithReadiness("/ready", () => dbPool.IsConnected())
 ```
 
 ### Route Naming & URL Generation
 
 ```gala
-val s = NewServer().
+val s = NewHTTP().
     GET("/users/{id}", handler).Named("user-detail")
 
 s.URL("user-detail", "id", "42")  // Some("/users/42")
@@ -445,7 +449,7 @@ s.URL("user-detail", "id", "42")  // Some("/users/42")
 ### Static File Serving
 
 ```gala
-server.Static("/public/", "./static")
+app.Static("/public/", "./static")
 ```
 
 ### Pluggable Interfaces
@@ -458,19 +462,19 @@ type Validator interface { Validate(i any) error }
 ### Listening (HTTP)
 
 ```gala
-server.Listen()                    // Start on configured port (default 8080)
-server.ListenOn(":9090")           // Start on explicit address
-server.ListenGraceful()            // Start with graceful shutdown
-server.ListenGracefulOn(":9090")   // Graceful on explicit address
+server.ServeHTTP(app)                       // Start on configured port (default 8080)
+server.ServeHTTPOn(":9090", app)             // Start on explicit address
+server.ServeHTTPGraceful(app)                // Start with graceful shutdown
+server.ServeHTTPGracefulOn(":9090", app)     // Graceful on explicit address
 ```
 
 ### Listening (TLS/HTTPS)
 
 ```gala
-server.ListenTLS("cert.pem", "key.pem")                   // HTTPS on configured port
-server.ListenTLSOn(":443", "cert.pem", "key.pem")         // HTTPS on explicit address
-server.ListenGracefulTLS("cert.pem", "key.pem")            // HTTPS + graceful shutdown
-server.ListenGracefulTLSOn(":443", "cert.pem", "key.pem") // HTTPS + graceful on address
+server.ServeHTTPTLS(app, "cert.pem", "key.pem")                    // HTTPS on configured port
+server.ServeHTTPTLSOn(":443", app, "cert.pem", "key.pem")          // HTTPS on explicit address
+server.ServeHTTPGracefulTLS(app, "cert.pem", "key.pem")            // HTTPS + graceful shutdown
+server.ServeHTTPGracefulTLSOn(":443", app, "cert.pem", "key.pem")  // HTTPS + graceful on address
 ```
 
 All TLS methods accept a certificate file and private key file path. They print a banner indicating HTTPS mode.
@@ -656,11 +660,11 @@ Built-in request metrics with a Prometheus text exposition endpoint. Inspired by
 ```gala
 val stats = NewMetrics()
 
-val server = NewServer().
+val app = NewHTTP().
     WithFilter(MetricsFilter(stats)).
     WithMetricsEndpoint("/metrics", stats).
     GET("/hello", (req) => Ok("hello")).
-    ListenGraceful()
+    // then: NewServer().ServeHTTPGraceful(app)
 ```
 
 ### NewMetrics
@@ -678,7 +682,7 @@ stats.UptimeSeconds()    // float64 — server uptime
 Records per-request metrics including method, path, status code, and latency. Uses `Future.Map` so latency measurement includes the full async handler execution across goroutines.
 
 ```gala
-server.WithFilter(MetricsFilter(stats))
+app.WithFilter(MetricsFilter(stats))
 ```
 
 ### WithMetricsEndpoint
@@ -686,7 +690,7 @@ server.WithFilter(MetricsFilter(stats))
 Registers a GET endpoint that serves all collected metrics in Prometheus text exposition format:
 
 ```gala
-server.WithMetricsEndpoint("/metrics", stats)
+app.WithMetricsEndpoint("/metrics", stats)
 ```
 
 **Exposed metrics:**
@@ -709,7 +713,7 @@ Cookie-based in-memory session management with concurrent access support. Inspir
 ```gala
 val sessions = NewSessions("my-secret")
 
-val server = NewServer().
+val app = NewHTTP().
     WithFilter(SessionFilter(sessions)).
     GET("/login", (req) => {
         req.SessionSet("user", "alice")
@@ -747,7 +751,7 @@ Filter that manages session lifecycle. On each request:
 3. After the handler completes (via `Future.Map`), sets the session cookie on new sessions
 
 ```gala
-server.WithFilter(SessionFilter(sessions))
+app.WithFilter(SessionFilter(sessions))
 ```
 
 ### Request Session Accessors

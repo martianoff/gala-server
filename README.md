@@ -9,7 +9,7 @@ A fast, immutable HTTP server library for the [GALA language](https://github.com
 - **35+ built-in filters** -- logging, auth (Bearer, Basic, JWT, API key), CORS, CSRF, rate limiting, gzip, proxy, security headers, circuit breaker, retry, bulkhead, ETag, caching, and more
 - **Filter algebra** -- compose, conditionally apply, or skip filters with `ComposeFilters`, `WhenFilter`, `Skip`
 - **Type-safe extractors** -- `PathParam`, `QueryRequired`, `HeaderRequired`, `BodyAs[T]` returning `Try[T]`
-- **TLS/HTTPS** -- `ListenTLS`, `ListenGracefulTLS` with cert/key
+- **TLS/HTTPS** -- `ServeHTTPTLS`, `ServeHTTPGracefulTLS` with cert/key
 - **Server-Sent Events** -- `SSE()` and `SSEStream()` for real-time push
 - **Resilience** -- `CircuitBreaker` (3-state), `RetryFilter` / `RetryFilterWithBackoff`, `Bulkhead` concurrency limiter
 - **Prometheus metrics** -- `MetricsFilter` tracks per-route request count, latency, status codes; `WithMetricsEndpoint` exposes `/metrics`
@@ -20,7 +20,7 @@ A fast, immutable HTTP server library for the [GALA language](https://github.com
 - **Error mapping** -- `WithErrorMapper` converts domain errors to HTTP responses
 - **Zero-reflection JSON** -- codec-based serialization via `JsonFrom[T]`
 - **Base path** -- `WithBasePath("/api/v1")` prefixes all routes
-- **Graceful shutdown** -- `ListenGraceful()` with configurable timeout
+- **Graceful shutdown** -- `ServeHTTPGraceful()` / `ServeTCP()` with configurable timeout
 - **Warmup** -- `WithWarmup` runs initialization before accepting traffic
 - **Go bridge** -- thin httpcore layer (~500 lines) is the only Go code
 
@@ -30,7 +30,7 @@ A fast, immutable HTTP server library for the [GALA language](https://github.com
 package main
 
 import (
-    . "martianoff/gala-server"
+    . "github.com/martianoff/gala-server"
     "time"
 )
 
@@ -43,9 +43,8 @@ func main() {
         WithCookieName("sid").
         WithMaxAge(3600)
 
-    val server = NewServer().
-        WithName("My API").
-        WithPort(8080).
+    // The protocol: routes, filters, everything HTTP-shaped.
+    val app = NewHTTP().
         WithBasePath("/api").
         WithHealthCheck("/health").
         WithReadiness("/ready", () => true).
@@ -73,15 +72,19 @@ func main() {
         WithFilter(RateLimitSlidingWindowPerIP(100, 1 * time.Minute)).
         WithFilter(CircuitBreaker(maxFailures = 5, resetTimeout = 30 * time.Second))
 
-    server.ListenGraceful()
+    // The host: identity, port, lifecycle.
+    NewServer().
+        WithName("My API").
+        WithPort(8080).
+        ServeHTTPGraceful(app)
 }
 ```
 
 ## TLS / HTTPS
 
 ```gala
-server.ListenTLS("cert.pem", "key.pem")
-server.ListenGracefulTLS("cert.pem", "key.pem")
+server.ServeHTTPTLS(app, "cert.pem", "key.pem")
+server.ServeHTTPGracefulTLS(app, "cert.pem", "key.pem")
 ```
 
 ## Type-Safe Extractors
@@ -143,7 +146,7 @@ val logExceptHealth = Skip(Logger(), "/health", "/ready")
 ```gala
 val stats = NewMetrics()
 
-val server = NewServer().
+val app = NewHTTP().
     WithMetricsEndpoint("/metrics", stats).
     GET("/users", userHandler).
     WithFilter(MetricsFilter(stats))
@@ -375,17 +378,17 @@ bazel run //examples/loadgen -- -url http://localhost:8080 -min-ms 20 -max-ms 20
 
 ```gala
 import (
-    . "martianoff/gala-server"
+    . "github.com/martianoff/gala-server"
     . "martianoff/gala/time_utils"
     "github.com/martianoff/gala-server/tui"
 )
 
 func main() {
-    val server = NewServer().
+    val app = NewHTTP().
         GET("/", (req) => Ok("hi")).
         WithFilter(Recovery())
 
-    tui.RunWithDashboard(server)
+    tui.RunWithDashboard(NewServer().WithPort(8080), app)
 }
 ```
 
