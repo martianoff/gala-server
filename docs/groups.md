@@ -4,7 +4,7 @@ Groups let you organize routes under a common prefix and apply shared filters.
 
 ## Creating a Group
 
-Use `NewGroup()` to create a route group (not `NewServer()` — groups cannot listen):
+Use `NewGroup()` to create a route group (not `NewHTTP()` — groups are mounted, not served):
 
 ```gala
 val users = NewGroup().
@@ -19,7 +19,7 @@ val users = NewGroup().
 Use `Group(prefix, group)` to mount a group under a prefix:
 
 ```gala
-val server = NewServer().
+val app = NewHTTP().
     Group("/api/v1/users", users).
     Listen(":8080")
 ```
@@ -44,7 +44,7 @@ val protectedApi = NewGroup().
     POST("/users", createUser).
     WithFilter(Auth())
 
-val server = NewServer().
+val app = NewHTTP().
     Group("", publicRoutes).
     Group("/api", protectedApi).
     WithFilter(Logger())
@@ -74,7 +74,7 @@ val v1 = NewGroup().
 val v2 = NewGroup().
     Group("/users", users)
 
-val server = NewServer().
+val app = NewHTTP().
     Group("/api/v1", v1).
     Group("/api/v2", v2).
     WithFilter(Logger())
@@ -89,7 +89,7 @@ val common = NewGroup().
     GET("/health", health).
     GET("/version", version)
 
-val server = NewServer().
+val app = NewHTTP().
     WithRoutes(common).
     GET("/", home)
 ```
@@ -98,7 +98,7 @@ val server = NewServer().
 
 | | `Server` | `Group` |
 |---|---|---|
-| Constructor | `NewServer()` | `NewGroup()` |
+| Constructor | `NewHTTP()` | `NewGroup()` |
 | Has `Listen()` | Yes | No |
 | Has `GET/POST/...` | Yes | Yes |
 | Has `WithFilter()` | Yes (global) | Yes (scoped) |

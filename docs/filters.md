@@ -15,8 +15,8 @@ Filters can be applied at three granularity levels:
 Pass filters directly to the HTTP method -- they apply only to that route:
 
 ```gala
-server.GET("/admin", adminHandler, Auth())
-server.GET("/metrics", metricsHandler, Auth(), RateLimit(1000.0, 100.0))
+app.GET("/admin", adminHandler, Auth())
+app.GET("/metrics", metricsHandler, Auth(), RateLimit(1000.0, 100.0))
 ```
 
 ### 2. Group-Level
@@ -29,16 +29,16 @@ val api = NewGroup().
     POST("/users", createUser).
     WithFilter(Auth())
 
-val server = NewServer().
+val app = NewHTTP().
     Group("/api/v1", api)   // Auth applies to /api/v1/users only
 ```
 
 ### 3. Global
 
-Add filters directly to the Server -- they apply to every route:
+Add filters directly to the HTTP config -- they apply to every route:
 
 ```gala
-val server = NewServer().
+val app = NewHTTP().
     GET("/", home).
     Group("/api", api).
     WithFilter(Logger()).     // wraps ALL routes
@@ -50,7 +50,7 @@ val server = NewServer().
 Filters execute in **declaration order** (first added = outermost):
 
 ```gala
-server.
+app.
     WithFilter(Logger()).     // 1st: runs first (outermost)
     WithFilter(Recovery()).   // 2nd: catches panics
     WithFilter(Cors())        // 3rd: adds CORS headers (innermost)
@@ -70,7 +70,7 @@ Composes two filters into one. The outer filter runs first, then delegates to th
 val secured = ComposeFilters(Auth(), RateLimit(100.0, 10.0))
 
 // Equivalent to applying both filters, but as a single unit:
-server.WithFilter(secured)
+app.WithFilter(secured)
 ```
 
 ### When
@@ -81,7 +81,7 @@ Conditionally applies a filter only when the predicate returns true. If the pred
 // Only apply auth to non-health-check paths
 val conditionalAuth = WhenFilter((req) => req.Path() != "/health", Auth())
 
-server.WithFilter(conditionalAuth)
+app.WithFilter(conditionalAuth)
 ```
 
 ### Skip
@@ -91,7 +91,7 @@ Skips applying a filter for specific paths. Useful for excluding health check, r
 ```gala
 val logExceptHealth = Skip(Logger(), "/health", "/ready", "/metrics")
 
-server.WithFilter(logExceptHealth)
+app.WithFilter(logExceptHealth)
 ```
 
 ### Use
@@ -218,7 +218,7 @@ Rewrite(rules)         // URL path rewriting with wildcard matching
 Generates ETags from response body hashes. Supports conditional requests via `If-None-Match` -- returns 304 Not Modified when the client already has the current version:
 
 ```gala
-server.WithFilter(ETag())
+app.WithFilter(ETag())
 ```
 
 When a request includes `If-None-Match` with a matching ETag, the filter short-circuits and returns a 304 response with no body, saving bandwidth.
@@ -229,13 +229,13 @@ Control caching behavior on responses:
 
 ```gala
 // Set Cache-Control: public, max-age=3600 (1 hour)
-server.WithFilter(CacheControl(3600))
+app.WithFilter(CacheControl(3600))
 
 // Disable caching entirely:
 // Cache-Control: no-cache, no-store, must-revalidate
 // Pragma: no-cache
 // Expires: 0
-server.WithFilter(NoCacheFilter())
+app.WithFilter(NoCacheFilter())
 ```
 
 ### Circuit Breaker
@@ -243,7 +243,7 @@ server.WithFilter(NoCacheFilter())
 Implements the circuit breaker pattern to protect against cascading failures:
 
 ```gala
-server.WithFilter(CircuitBreaker(
+app.WithFilter(CircuitBreaker(
     maxFailures = 5,
     resetTimeout = 30 * time.Second,
     halfOpenMax = 1,
@@ -266,10 +266,10 @@ Retry failed requests with configurable backoff strategies:
 
 ```gala
 // Fixed backoff: wait 100ms between each retry
-server.WithFilter(RetryFilter(maxRetries = 3, backoff = 100 * time.Millisecond))
+app.WithFilter(RetryFilter(maxRetries = 3, backoff = 100 * time.Millisecond))
 
 // Exponential backoff: 100ms -> 200ms -> 400ms -> ... capped at 5s
-server.WithFilter(RetryFilterWithBackoff(
+app.WithFilter(RetryFilterWithBackoff(
     maxRetries = 3,
     initialBackoff = 100 * time.Millisecond,
     maxBackoff = 5 * time.Second,
@@ -285,7 +285,7 @@ Both retry on 5xx responses or handler failures. The handler is re-invoked up to
 Limits the number of concurrent in-flight requests using a semaphore:
 
 ```gala
-server.WithFilter(Bulkhead(maxConcurrent = 100))
+app.WithFilter(Bulkhead(maxConcurrent = 100))
 ```
 
 When the number of concurrent requests reaches `maxConcurrent`, new requests are immediately rejected with 503 Service Unavailable. The semaphore slot is released when the handler completes, whether it succeeds or fails.
@@ -299,7 +299,7 @@ Records per-request metrics including method, path, status code, and latency. Us
 ```gala
 val stats = NewMetrics()
 
-val server = NewServer().
+val app = NewHTTP().
     WithFilter(MetricsFilter(stats)).
     WithMetricsEndpoint("/metrics", stats).
     GET("/hello", (req) => Ok("hello"))
@@ -319,7 +319,7 @@ val sessions = NewSessions("my-secret").
     WithMaxAge(3600).
     WithSecure(true)
 
-val server = NewServer().
+val app = NewHTTP().
     WithFilter(SessionFilter(sessions)).
     GET("/login", (req) => {
         req.SessionSet("user", "alice")
@@ -362,7 +362,7 @@ val admin = NewGroup().
     GET("/settings", settings).
     WithFilter(Auth())              // group: only admin routes
 
-val server = NewServer().
+val app = NewHTTP().
     GET("/", home).                 // no per-route filters
     GET("/health", health).         // no per-route filters
     GET("/metrics", metrics, Auth()).  // per-route: just this endpoint

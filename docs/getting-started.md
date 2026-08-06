@@ -13,31 +13,38 @@ bazel_dep(name = "gala-server", version = "0.1.0")
 ```gala
 package main
 
-import . "martianoff/gala-server"
+import . "github.com/martianoff/gala-server"
 
 func main() {
-    val server = NewServer().
+    val app = NewHTTP().
         GET("/", (req) => Ok("Hello, GALA!")).
         GET("/health", (req) => JsonResponse("{\"status\": \"ok\"}")).
         WithFilter(Logger()).
         WithFilter(Recovery())
 
-    server.ListenGraceful()
+    NewServer().WithPort(8080).ServeHTTPGraceful(app)
 }
 ```
 
 ## Core Concepts
 
-### Server
+### Server and HTTP
 
-`NewServer()` creates an immutable HTTP server builder. Chain methods to add routes and filters, then call `Listen()` or `ListenGraceful()` to start.
+Two builders, deliberately separate. `NewHTTP()` describes the protocol —
+routes, filters, error handling. `NewServer()` describes the host — name, port,
+shutdown timeout, banner, warmup. You hand the protocol to the host.
+
+The split exists because gala-server also serves protocols that are not HTTP
+(see [tcp.md](tcp.md)): a port and a shutdown timeout are not HTTP concepts,
+but routes and filters are.
 
 ```gala
-val server = NewServer().
+val app = NewHTTP().
     GET("/users", listUsers).
     POST("/users", createUser).
-    WithFilter(Logger()).
-    ListenGraceful()
+    WithFilter(Logger())
+
+NewServer().WithPort(8080).ServeHTTPGraceful(app)
 ```
 
 ### Handlers
@@ -108,9 +115,9 @@ Ok("hello").
 Patterns use Go 1.22+ syntax:
 
 ```gala
-server.GET("/users", handler)           // exact match
-server.GET("/users/{id}", handler)      // path parameter
-server.GET("/files/{path...}", handler) // wildcard (rest of path)
+app.GET("/users", handler)           // exact match
+app.GET("/users/{id}", handler)      // path parameter
+app.GET("/files/{path...}", handler) // wildcard (rest of path)
 ```
 
 ## TLS / HTTPS
@@ -118,16 +125,17 @@ server.GET("/files/{path...}", handler) // wildcard (rest of path)
 Serve over HTTPS by providing a certificate and key:
 
 ```gala
-val server = NewServer().
-    WithPort(443).
+val app = NewHTTP().
     GET("/", (req) => Ok("Secure!")).
     WithFilter(Logger())
 
+val server = NewServer().WithPort(443)
+
 // Basic TLS
-server.ListenTLS("cert.pem", "key.pem")
+server.ServeHTTPTLS(app, "cert.pem", "key.pem")
 
 // TLS with graceful shutdown
-server.ListenGracefulTLS("cert.pem", "key.pem")
+server.ServeHTTPGracefulTLS(app, "cert.pem", "key.pem")
 ```
 
 ## Type-Safe Extractors
@@ -135,7 +143,7 @@ server.ListenGracefulTLS("cert.pem", "key.pem")
 Instead of manually unwrapping `Option` values from request parameters, use extractors that return `Try[T]` for clean error handling:
 
 ```gala
-import . "martianoff/gala-server"
+import . "github.com/martianoff/gala-server"
 
 func getUser(req Request) Response =
     PathParamInt(req, "id") match {
@@ -175,11 +183,12 @@ Track request count, latency, and status codes with a built-in Prometheus endpoi
 ```gala
 val stats = NewMetrics()
 
-val server = NewServer().
+val app = NewHTTP().
     WithFilter(MetricsFilter(stats)).
     WithMetricsEndpoint("/metrics", stats).
-    GET("/hello", (req) => Ok("hello")).
-    ListenGraceful()
+    GET("/hello", (req) => Ok("hello"))
+
+NewServer().ServeHTTPGraceful(app)
 ```
 
 Visit `/metrics` to see Prometheus-format stats: `gala_requests_total`, `gala_responses_total{status}`, `gala_route_latency_avg_ms{route}`, and more.
@@ -191,7 +200,7 @@ Cookie-based in-memory sessions for stateful request handling:
 ```gala
 val sessions = NewSessions("my-secret")
 
-val server = NewServer().
+val app = NewHTTP().
     WithFilter(SessionFilter(sessions)).
     GET("/login", (req) => {
         req.SessionSet("user", "alice")
