@@ -4,6 +4,7 @@ go_library(
     name = "httpcore",
     srcs = [
         "httpcore.go",
+        "tcpcore.go",
         "testing.go",
     ],
     importpath = "github.com/martianoff/gala-server/httpcore",
