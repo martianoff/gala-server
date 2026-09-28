@@ -237,7 +237,7 @@ func headerView(m DashboardModel) Widget {
     val uptime = elapsed.Round(time.Second).String()
     return Padding(0, TextStyled(
         s" GALA Server Dashboard   ${rps} req/s   p95 ${p95Now}ms   ${m.Total} total   uptime ${uptime}",
-        DefaultStyle().WithBold().WithFg(BrightCyan()),
+        DefaultStyle().WithBold().WithFg(BrightCyan),
     ))
 }
 
@@ -246,11 +246,11 @@ func chartsRow(m DashboardModel) Widget =
     Row(ArrayOf[LayoutChild](
         Flex(1, Column(ArrayOf[LayoutChild](
             Fixed(1, Text(" Throughput (req/s, last 60s)")),
-            Flex(1, SparklineStyled(m.RPS, DefaultStyle().WithFg(BrightGreen()))),
+            Flex(1, SparklineStyled(m.RPS, DefaultStyle().WithFg(BrightGreen))),
         ))),
         Flex(1, Column(ArrayOf[LayoutChild](
             Fixed(1, Text(" Latency p95 (ms, last 60s)")),
-            Flex(1, SparklineStyled(m.LatencyMs, DefaultStyle().WithFg(BrightYellow()))),
+            Flex(1, SparklineStyled(m.LatencyMs, DefaultStyle().WithFg(BrightYellow))),
         ))),
     ))
 
