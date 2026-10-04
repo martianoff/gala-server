@@ -7,7 +7,7 @@ on:
     branches: [master]
 
 env:
-  GALA_VERSION: "0.84.1"
+  GALA_VERSION: "0.85.0"
 
 jobs:
   build:
