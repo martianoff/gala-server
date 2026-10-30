@@ -88,7 +88,7 @@ func (s Server) ServeHTTPOn(addr string, h HTTP) Try[bool] {
     val sb = h.buildServerBuilder()
     s.runWarmup()
     s.printBanner(addr, "HTTP", false, h.bannerLines(s.Debug))
-    return Try(sb.ListenAndServe(addr)).Map((_) => true)
+    return FromError(sb.ListenAndServe(addr)).Map((_) => true)
 }
 
 // ServeHTTPGraceful starts an HTTP server that drains on SIGINT/SIGTERM.
@@ -99,7 +99,7 @@ func (s Server) ServeHTTPGracefulOn(addr string, h HTTP) Try[bool] {
     val sb = h.buildServerBuilder()
     s.runWarmup()
     s.printBanner(addr, "HTTP", true, h.bannerLines(s.Debug))
-    return Try(sb.ListenAndServeGraceful(addr, s.ShutdownTimeout)).Map((_) => true)
+    return FromError(sb.ListenAndServeGraceful(addr, s.ShutdownTimeout)).Map((_) => true)
 }
 
 // --- Serve (HTTPS) ---
@@ -113,7 +113,7 @@ func (s Server) ServeHTTPTLSOn(addr string, h HTTP, certFile string, keyFile str
     val sb = h.buildServerBuilder()
     s.runWarmup()
     s.printBanner(addr, "HTTPS", false, h.bannerLines(s.Debug))
-    return Try(sb.ListenAndServeTLS(addr, certFile, keyFile)).Map((_) => true)
+    return FromError(sb.ListenAndServeTLS(addr, certFile, keyFile)).Map((_) => true)
 }
 
 // ServeHTTPGracefulTLS starts an HTTPS server that drains on SIGINT/SIGTERM.
@@ -125,7 +125,7 @@ func (s Server) ServeHTTPGracefulTLSOn(addr string, h HTTP, certFile string, key
     val sb = h.buildServerBuilder()
     s.runWarmup()
     s.printBanner(addr, "HTTPS", true, h.bannerLines(s.Debug))
-    return Try(sb.ListenAndServeTLSGraceful(addr, certFile, keyFile, s.ShutdownTimeout)).Map((_) => true)
+    return FromError(sb.ListenAndServeTLSGraceful(addr, certFile, keyFile, s.ShutdownTimeout)).Map((_) => true)
 }
 
 // --- Internal ---
