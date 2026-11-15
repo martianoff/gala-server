@@ -1,7 +1,6 @@
 package server
 
 import (
-    . "martianoff/gala/collection_immutable"
     . "martianoff/gala/concurrent"
 )
 

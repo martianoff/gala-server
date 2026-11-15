@@ -1,7 +1,6 @@
 package server
 
 import (
-    . "martianoff/gala/concurrent"
     "github.com/martianoff/gala-server/httpcore"
     "time"
 )
