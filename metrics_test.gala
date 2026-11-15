@@ -4,7 +4,6 @@ import (
     . "martianoff/gala/test"
     . "martianoff/gala/concurrent"
     "github.com/martianoff/gala-server/httpcore"
-    "strings"
     "time"
 )
 
