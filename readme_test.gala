@@ -28,7 +28,7 @@ func startOnPort(s HTTP) string {
 
     val port = 19100 + readmePortCounter.Next()
     val addr = s":$port"
-    concurrent.Spawn(() => { sb.ListenAndServe(addr) })
+    concurrent.Spawn(() => { FromError(sb.ListenAndServe(addr)) })
     time.Sleep(100 * time.Millisecond)
     return s"http://localhost:$port"
 }
